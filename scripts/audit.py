@@ -43,12 +43,30 @@ def estimate_tokens(lines: int) -> int:
 # ── Checks ──────────────────────────────────────────────────────────────
 
 class AuditResult:
+    """Tracks audit score across four weighted categories (100 points total).
+
+    Categories (from audit-rules.md):
+      - structure:  30 points — CLAUDE.md exists/sized, agents have frontmatter, valid settings
+      - efficiency: 30 points — token budgets for each component and total
+      - freshness:  20 points — stale paths, stale command references
+      - practices:  20 points — no duplicates, hooks not aggressive, handoff exists
+    """
+
+    CATEGORY_BUDGETS = {"structure": 30, "efficiency": 30, "freshness": 20, "practices": 20}
+
     def __init__(self):
         self.score = 100
         self.components = {}  # name -> {lines, tokens, status}
-        self.issues = []      # {level: error|warning, message, fix}
+        self.issues = []      # {level: error|warning, message, fix, category}
         self.total_lines = 0
         self.total_tokens = 0
+        self._deductions = {"structure": 0, "efficiency": 0, "freshness": 0, "practices": 0}
+
+    def _deduct(self, category: str, points: int):
+        """Deduct points from a category, capped at the category's budget."""
+        budget = self.CATEGORY_BUDGETS.get(category, 10)
+        self._deductions[category] = min(self._deductions[category] + points, budget)
+        self.score = 100 - sum(self._deductions.values())
 
     def add_component(self, name, lines, budget_warn, budget_fail):
         tokens = estimate_tokens(lines)
@@ -58,24 +76,26 @@ class AuditResult:
             self.issues.append({
                 "level": "error",
                 "message": f"{name}: {lines} lines (max {budget_fail})",
-                "fix": f"Reduce {name} to ≤{budget_warn} lines"
+                "fix": f"Reduce {name} to ≤{budget_warn} lines",
+                "category": "efficiency",
             })
-            self.score -= 10
+            self._deduct("efficiency", 10)
         elif lines > budget_warn:
             status = "⚠ nearing limit"
             self.issues.append({
                 "level": "warning",
                 "message": f"{name}: {lines} lines (target ≤{budget_warn})",
-                "fix": f"Consider trimming {name}"
+                "fix": f"Consider trimming {name}",
+                "category": "efficiency",
             })
-            self.score -= 3
+            self._deduct("efficiency", 3)
         self.components[name] = {"lines": lines, "tokens": tokens, "status": status}
         self.total_lines += lines
         self.total_tokens += tokens
 
-    def add_issue(self, level, message, fix=""):
-        self.issues.append({"level": level, "message": message, "fix": fix})
-        self.score -= 10 if level == "error" else 3
+    def add_issue(self, level, message, fix="", category="practices"):
+        self.issues.append({"level": level, "message": message, "fix": fix, "category": category})
+        self._deduct(category, 10 if level == "error" else 3)
 
     def to_dict(self):
         return {
@@ -84,6 +104,7 @@ class AuditResult:
             "total_tokens": self.total_tokens,
             "components": self.components,
             "issues": self.issues,
+            "categories": {k: self.CATEGORY_BUDGETS[k] - v for k, v in self._deductions.items()},
         }
 
 
@@ -91,7 +112,7 @@ def check_claude_md(project_dir: Path, result: AuditResult):
     """Check CLAUDE.md exists and is within budget."""
     claude_md = project_dir / "CLAUDE.md"
     if not claude_md.exists():
-        result.add_issue("error", "CLAUDE.md not found", "Create a CLAUDE.md file")
+        result.add_issue("error", "CLAUDE.md not found", "Create a CLAUDE.md file", category="structure")
         return
     lines = count_lines(claude_md)
     result.add_component("CLAUDE.md", lines, budget_warn=80, budget_fail=150)
@@ -101,12 +122,12 @@ def check_agents(project_dir: Path, result: AuditResult):
     """Check agents directory for valid agent files."""
     agents_dir = project_dir / ".claude" / "agents"
     if not agents_dir.exists():
-        result.add_issue("warning", "No .claude/agents/ directory", "Create agents for common workflows")
+        result.add_issue("warning", "No .claude/agents/ directory", "Create agents for common workflows", category="structure")
         return
 
     agent_files = list(agents_dir.glob("*.md"))
     if not agent_files:
-        result.add_issue("warning", "No agent files found in .claude/agents/", "Add agents for your workflow")
+        result.add_issue("warning", "No agent files found in .claude/agents/", "Add agents for your workflow", category="structure")
         return
 
     total_agent_lines = 0
@@ -123,7 +144,7 @@ def check_agents(project_dir: Path, result: AuditResult):
             fm_name_match = re.search(r'^name:\s*(.+)$', agent_content, re.MULTILINE)
             fm_name = fm_name_match.group(1).strip() if fm_name_match else name
             if fm_name in names_seen:
-                result.add_issue("warning", f"Duplicate agent name '{fm_name}' in {af.name}", f"Remove or rename duplicate agent")
+                result.add_issue("warning", f"Duplicate agent name '{fm_name}' in {af.name}", f"Remove or rename duplicate agent", category="practices")
             names_seen.add(fm_name)
         except UnicodeDecodeError:
             names_seen.add(name)
@@ -132,11 +153,13 @@ def check_agents(project_dir: Path, result: AuditResult):
         if lines > 50:
             result.add_issue("warning",
                 f"Agent {af.name}: {lines} lines (target ≤30)",
-                f"Trim {af.name} — agents should be directives, not tutorials")
+                f"Trim {af.name} — agents should be directives, not tutorials",
+                category="efficiency")
         elif lines > 30:
             result.add_issue("warning",
                 f"Agent {af.name}: {lines} lines (target ≤30)",
-                f"Consider trimming {af.name}")
+                f"Consider trimming {af.name}",
+                category="efficiency")
 
         # Check for YAML frontmatter
         try:
@@ -144,7 +167,8 @@ def check_agents(project_dir: Path, result: AuditResult):
             if not content.startswith("---"):
                 result.add_issue("warning",
                     f"Agent {af.name} missing YAML frontmatter",
-                    f"Add --- header with name, description, tools fields")
+                    f"Add --- header with name, description, tools fields",
+                    category="structure")
         except UnicodeDecodeError:
             pass
 
@@ -166,7 +190,8 @@ def check_rules(project_dir: Path, result: AuditResult):
         if lines > 30:
             result.add_issue("warning",
                 f"Rule {rf.name}: {lines} lines (target ≤20)",
-                f"Trim {rf.name} — rules should be concise directives")
+                f"Trim {rf.name} — rules should be concise directives",
+                category="efficiency")
 
     if rule_files:
         result.add_component(f"Rules ({len(rule_files)})", total_rule_lines, budget_warn=60, budget_fail=100)
@@ -184,7 +209,7 @@ def check_settings(project_dir: Path, result: AuditResult):
     try:
         data = json.loads(settings.read_text())
     except (json.JSONDecodeError, UnicodeDecodeError):
-        result.add_issue("error", "settings.json is not valid JSON", "Fix JSON syntax")
+        result.add_issue("error", "settings.json is not valid JSON", "Fix JSON syntax", category="structure")
         return
 
     # Check for overly aggressive hooks
@@ -194,7 +219,6 @@ def check_settings(project_dir: Path, result: AuditResult):
             for hook in hook_list:
                 if isinstance(hook, dict):
                     matcher = hook.get("matcher", "")
-                    # Check for hooks that block common operations
                     hook_items = hook.get("hooks", [])
                     for h in hook_items:
                         if isinstance(h, dict) and h.get("type") == "block":
@@ -202,7 +226,8 @@ def check_settings(project_dir: Path, result: AuditResult):
                             if ".md" in str(pattern) and "Write" in str(matcher):
                                 result.add_issue("warning",
                                     f"Hook blocks .md file writes — may be overly restrictive",
-                                    "Consider narrowing the block pattern")
+                                    "Consider narrowing the block pattern",
+                                    category="practices")
 
 
 def check_staleness(project_dir: Path, result: AuditResult):
@@ -221,11 +246,12 @@ def check_staleness(project_dir: Path, result: AuditResult):
                 if f"/{cmd}" in content and cmd not in existing_cmds:
                     result.add_issue("warning",
                         f"CLAUDE.md references /{cmd} but command doesn't exist",
-                        f"Either create .claude/commands/{cmd}.md or remove the reference")
+                        f"Either create .claude/commands/{cmd}.md or remove the reference",
+                        category="freshness")
         except UnicodeDecodeError:
             pass
 
-    # Check rules reference valid paths
+    # Check rules reference valid paths (deep validation)
     rules_dir = project_dir / ".claude" / "rules"
     if rules_dir.exists():
         for rf in rules_dir.glob("*.md"):
@@ -233,14 +259,23 @@ def check_staleness(project_dir: Path, result: AuditResult):
                 content = rf.read_text()
                 # Look for path patterns like src/app/, src/pages/, etc.
                 path_patterns = re.findall(r'(?:src|app|lib|internal|packages|services|tools|components|pages|api|cmd|pkg)/[\w/]+', content)
+                warned = False
                 for pattern in path_patterns:
-                    # Check if at least the first directory level exists
-                    first_dir = pattern.split('/')[0]
-                    if not (project_dir / first_dir).exists():
-                        result.add_issue("warning",
-                            f"Rule {rf.name} references '{pattern}' but '{first_dir}/' doesn't exist",
-                            f"Update path references in {rf.name}")
-                        break  # One warning per rule is enough
+                    if warned:
+                        break
+                    # Validate path segments progressively deeper
+                    parts = pattern.split('/')
+                    check_path = project_dir
+                    for i, part in enumerate(parts):
+                        check_path = check_path / part
+                        if not check_path.exists():
+                            stale_segment = '/'.join(parts[:i+1])
+                            result.add_issue("warning",
+                                f"Rule {rf.name} references '{pattern}' but '{stale_segment}/' doesn't exist",
+                                f"Update path references in {rf.name}",
+                                category="freshness")
+                            warned = True
+                            break
             except UnicodeDecodeError:
                 pass
 
@@ -267,20 +302,23 @@ def check_mcp_servers(project_dir: Path, result: AuditResult):
     if server_count > 5:
         result.add_issue("warning",
             f"{server_count} MCP servers configured — may slow startup",
-            "Remove unused MCP servers. Aim for 1-3")
+            "Remove unused MCP servers. Aim for 1-3",
+            category="practices")
 
     for name, config in mcp.items():
         if not isinstance(config, dict):
             result.add_issue("error",
                 f"MCP server '{name}' has invalid config (expected object)",
-                f"Fix mcpServers.{name} in settings.json")
+                f"Fix mcpServers.{name} in settings.json",
+                category="structure")
             continue
 
         # Check required fields
         if "command" not in config:
             result.add_issue("error",
                 f"MCP server '{name}' missing 'command' field",
-                f"Add 'command' to mcpServers.{name}")
+                f"Add 'command' to mcpServers.{name}",
+                category="structure")
 
         # Check for hardcoded secrets — pattern + heuristic based
         SECRET_PATTERNS = [
@@ -301,11 +339,13 @@ def check_mcp_servers(project_dir: Path, result: AuditResult):
             if is_secret_key and (len(env_val) > 20 or is_secret_pattern):
                 result.add_issue("error",
                     f"MCP server '{name}' has hardcoded secret in {env_key}",
-                    f"Use ${{ENV_VAR}} syntax: \"{env_key}\": \"${{{env_key}}}\"")
+                    f"Use ${{ENV_VAR}} syntax: \"{env_key}\": \"${{{env_key}}}\"",
+                    category="practices")
             elif is_secret_pattern:
                 result.add_issue("warning",
                     f"MCP server '{name}': {env_key} value looks like a secret",
-                    f"Use ${{ENV_VAR}} syntax instead of hardcoding")
+                    f"Use ${{ENV_VAR}} syntax instead of hardcoding",
+                    category="practices")
 
     result.add_component(f"MCP Servers ({server_count})", server_count * 3, budget_warn=15, budget_fail=30)
 
@@ -316,7 +356,8 @@ def check_handoff(project_dir: Path, result: AuditResult):
     if not handoff.exists():
         result.add_issue("warning",
             "No .claude/handoff.md — context will be lost between sessions",
-            "Create a handoff document or run /handoff")
+            "Create a handoff document or run /handoff",
+            category="practices")
 
 
 def check_total_budget(result: AuditResult):
@@ -324,11 +365,13 @@ def check_total_budget(result: AuditResult):
     if result.total_tokens > 2400:
         result.add_issue("warning",
             f"Total config: ~{result.total_tokens} tokens (target ≤1,600)",
-            "Consider trimming the largest components")
+            "Consider trimming the largest components",
+            category="efficiency")
     if result.total_tokens > 4000:
         result.add_issue("error",
             f"Total config: ~{result.total_tokens} tokens — significant per-message overhead",
-            "Reduce CLAUDE.md and agent sizes to lower token burn")
+            "Reduce CLAUDE.md and agent sizes to lower token burn",
+            category="efficiency")
 
 
 # ── Main audit ──────────────────────────────────────────────────────────
@@ -343,6 +386,8 @@ def audit(project_dir: Path) -> AuditResult:
     check_settings(project_dir, result)
     check_staleness(project_dir, result)
     check_mcp_servers(project_dir, result)
+    check_skills_content(project_dir, result)
+    check_commands_content(project_dir, result)
     check_handoff(project_dir, result)
     check_total_budget(result)
 
@@ -352,10 +397,12 @@ def audit(project_dir: Path) -> AuditResult:
 
 def format_report(result: AuditResult) -> str:
     """Format audit result as human-readable report."""
+    cats = result.to_dict().get("categories", {})
     lines = [
         "Claude Launchpad Audit Report",
         "─" * 40,
-        f"Health Score: {result.score}/100",
+        f"Health Score: {max(0, result.score)}/100",
+        f"  Structure: {cats.get('structure', 30)}/30  Efficiency: {cats.get('efficiency', 30)}/30  Freshness: {cats.get('freshness', 20)}/20  Practices: {cats.get('practices', 20)}/20",
         "",
         "Token Budget",
     ]
@@ -403,6 +450,136 @@ def format_report(result: AuditResult) -> str:
     return "\n".join(lines)
 
 
+def check_skills_content(project_dir: Path, result: AuditResult):
+    """Check skills directory for content quality issues."""
+    skills_dir = project_dir / ".claude" / "skills"
+    if not skills_dir.exists():
+        return
+
+    skill_files = list(skills_dir.glob("*.md"))
+    if not skill_files:
+        return
+
+    total_skill_lines = 0
+    for sf in skill_files:
+        lines = count_lines(sf)
+        total_skill_lines += lines
+        if lines > 50:
+            result.add_issue("warning",
+                f"Skill {sf.name}: {lines} lines (target ≤40)",
+                f"Trim {sf.name} — skills should be concise directives",
+                category="efficiency")
+
+        # Check for YAML frontmatter with description
+        try:
+            content = sf.read_text()
+            if not content.startswith("---"):
+                result.add_issue("warning",
+                    f"Skill {sf.name} missing YAML frontmatter",
+                    f"Add --- header with description field",
+                    category="structure")
+            elif content.count("---") >= 2 and "description:" not in content.split("---")[1]:
+                result.add_issue("warning",
+                    f"Skill {sf.name} missing description in frontmatter",
+                    f"Add description: field to frontmatter",
+                    category="structure")
+        except (UnicodeDecodeError, IndexError):
+            pass
+
+
+def check_commands_content(project_dir: Path, result: AuditResult):
+    """Check commands directory for content quality issues."""
+    commands_dir = project_dir / ".claude" / "commands"
+    if not commands_dir.exists():
+        return
+
+    cmd_files = list(commands_dir.glob("*.md"))
+    for cf in cmd_files:
+        try:
+            content = cf.read_text()
+            if not content.startswith("---"):
+                result.add_issue("warning",
+                    f"Command {cf.name} missing YAML frontmatter",
+                    f"Add --- header with description field",
+                    category="structure")
+            elif content.count("---") >= 2 and "description:" not in content.split("---")[1]:
+                result.add_issue("warning",
+                    f"Command {cf.name} missing description in frontmatter",
+                    f"Add description: field to frontmatter",
+                    category="structure")
+        except (UnicodeDecodeError, IndexError):
+            pass
+
+
+# ── Auto-fix ───────────────────────────────────────────────────────────
+
+def apply_fixes(project_dir: Path, result: AuditResult) -> list[str]:
+    """Apply safe, non-destructive fixes. Returns list of actions taken."""
+    actions = []
+
+    # Fix 1: Create missing handoff.md
+    handoff = project_dir / ".claude" / "handoff.md"
+    if not handoff.exists() and (project_dir / ".claude").exists():
+        handoff.write_text("# Session Handoff\n\n## What's Working\n- (not yet populated)\n\n## In Progress\n- (nothing yet)\n\n## Known Issues\n- (none)\n\n## Next Steps\n1. Run /status\n")
+        actions.append("Created .claude/handoff.md")
+
+    # Fix 2: Add missing YAML frontmatter to agents
+    agents_dir = project_dir / ".claude" / "agents"
+    if agents_dir.exists():
+        for af in agents_dir.glob("*.md"):
+            try:
+                content = af.read_text()
+                if not content.startswith("---"):
+                    name = af.stem
+                    new_content = f"---\nname: {name}\ndescription: {name} agent\n---\n{content}"
+                    af.write_text(new_content)
+                    actions.append(f"Added frontmatter to agent {af.name}")
+            except UnicodeDecodeError:
+                pass
+
+    # Fix 3: Add missing YAML frontmatter to skills
+    skills_dir = project_dir / ".claude" / "skills"
+    if skills_dir.exists():
+        for sf in skills_dir.glob("*.md"):
+            try:
+                content = sf.read_text()
+                if not content.startswith("---"):
+                    name = sf.stem.replace("-", " ").title()
+                    new_content = f"---\ndescription: {name}\n---\n{content}"
+                    sf.write_text(new_content)
+                    actions.append(f"Added frontmatter to skill {sf.name}")
+            except UnicodeDecodeError:
+                pass
+
+    # Fix 4: Add missing YAML frontmatter to commands
+    commands_dir = project_dir / ".claude" / "commands"
+    if commands_dir.exists():
+        for cf in commands_dir.glob("*.md"):
+            try:
+                content = cf.read_text()
+                if not content.startswith("---"):
+                    name = cf.stem.replace("-", " ").title()
+                    new_content = f"---\ndescription: {name}\n---\n{content}"
+                    cf.write_text(new_content)
+                    actions.append(f"Added frontmatter to command {cf.name}")
+            except UnicodeDecodeError:
+                pass
+
+    # Fix 5: Fix invalid settings.json
+    settings = project_dir / ".claude" / "settings.json"
+    if settings.exists():
+        try:
+            json.loads(settings.read_text())
+        except json.JSONDecodeError:
+            # Back up and create empty valid JSON
+            backup = settings.with_suffix(".json.bak")
+            settings.rename(backup)
+            settings.write_text("{}\n")
+            actions.append(f"Fixed invalid settings.json (backup: {backup.name})")
+
+    return actions
+
+
 def main():
     parser = argparse.ArgumentParser(description="Claude Launchpad Config Auditor")
     parser.add_argument("project_dir", help="Project root directory to audit")
@@ -416,7 +593,24 @@ def main():
         sys.exit(1)
 
     if args.fix:
-        print("Warning: --fix is not yet implemented. Showing report only.\n", file=sys.stderr)
+        # Run audit first to identify issues
+        result = audit(project_dir)
+        print(format_report(result))
+        print()
+
+        # Apply fixes
+        actions = apply_fixes(project_dir, result)
+        if actions:
+            print(f"Applied {len(actions)} fixes:")
+            for a in actions:
+                print(f"  ✓ {a}")
+            # Re-audit to show improvement
+            result2 = audit(project_dir)
+            print(f"\nScore: {result.score}/100 → {result2.score}/100")
+        else:
+            print("No auto-fixable issues found.")
+
+        sys.exit(0 if result.score >= 60 else 1)
 
     result = audit(project_dir)
 

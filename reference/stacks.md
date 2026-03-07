@@ -95,6 +95,46 @@ Quick-reference for stack-specific patterns. Read the section matching the user'
 ### Custom JWT
 - **Conventions**: Stateless tokens with short expiry (15min access, 7d refresh). Refresh token rotation. Store refresh tokens in DB. httpOnly cookies for web, Authorization header for API.
 
+### Rust / Actix-web
+- **Key paths**: `src/main.rs`, `src/routes/`, `src/handlers/`, `src/models/`, `src/db/`, `src/errors.rs`
+- **Commands**: `cargo run`, `cargo test`, `cargo clippy`, `cargo fmt`, `cargo build --release`
+- **Conventions**: Handler → Service → Repository. `Result<T, AppError>` everywhere. Derive macros for serialization (serde). Sqlx for async DB. Tower middleware.
+- **Mistakes**: Never `.unwrap()` in production code. Never block the async runtime. Always propagate errors with `?`. Always use `#[derive(Debug)]`.
+
+### Ruby on Rails
+- **Key paths**: `app/controllers/`, `app/models/`, `app/views/`, `app/services/`, `config/routes.rb`, `db/migrate/`
+- **Commands**: `rails server`, `rails test`, `bundle exec rubocop`, `rails db:migrate`, `rails console`
+- **Conventions**: MVC + service objects for business logic. Strong params for input. ActiveRecord validations. RESTful routes. Convention over configuration.
+- **Mistakes**: Never put logic in controllers (use services). Never N+1 queries (use `includes`). Never modify applied migrations. Always add database indexes for foreign keys.
+- **Rules target**: `app/controllers/**/*.rb` (thin controllers), `app/models/**/*.rb` (validations, scopes, no business logic)
+
+## Monorepo Patterns
+
+### Turborepo / pnpm workspaces
+- **Key paths**: `apps/` (deployable apps), `packages/` (shared libraries), `turbo.json`, `pnpm-workspace.yaml`
+- **Commands**: `pnpm turbo run build`, `pnpm turbo run test`, `pnpm turbo run lint`, `pnpm --filter <app> dev`
+- **Conventions**: Shared packages in `packages/`. Internal packages use `"main": "./src/index.ts"`. Turborepo caches build artifacts. `tsconfig` extends from root.
+- **Mistakes**: Never import between apps directly (use packages). Always declare dependencies explicitly. Never skip turbo caching in CI.
+
+### Nx
+- **Key paths**: `apps/`, `libs/`, `nx.json`, `project.json` per project
+- **Commands**: `nx serve <app>`, `nx test <project>`, `nx build <project>`, `nx affected --target=test`
+- **Conventions**: Libraries categorized as feature/data-access/ui/util. Module boundary rules via tags. Affected commands for CI efficiency.
+
+## Mobile
+
+### React Native / Expo
+- **Key paths**: `app/` (Expo Router), `src/components/`, `src/hooks/`, `src/stores/`, `src/services/`
+- **Commands**: `npx expo start`, `npx expo run:ios`, `npx expo run:android`, `npm run test`, `npm run lint`
+- **Conventions**: Expo Router for navigation. React Native Paper or NativeWind for styling. React Query for server state. Platform-specific files with `.ios.ts`/`.android.ts`.
+- **Mistakes**: Never use `window` or DOM APIs. Never import web-only packages. Always handle safe area insets. Always test on both platforms.
+
+### Flutter
+- **Key paths**: `lib/main.dart`, `lib/screens/`, `lib/widgets/`, `lib/models/`, `lib/services/`, `lib/providers/`
+- **Commands**: `flutter run`, `flutter test`, `flutter analyze`, `flutter build apk`, `flutter build ios`
+- **Conventions**: Provider or Riverpod for state. Repository pattern for data. Separate UI from logic. Dart null safety everywhere.
+- **Mistakes**: Never setState in complex widgets (use state management). Never hardcode strings (use l10n). Always dispose controllers.
+
 ## Deployment
 
 ### Vercel
