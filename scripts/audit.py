@@ -236,6 +236,55 @@ def check_staleness(project_dir: Path, result: AuditResult):
                 pass
 
 
+def check_mcp_servers(project_dir: Path, result: AuditResult):
+    """Check MCP server configuration for issues."""
+    settings = project_dir / ".claude" / "settings.json"
+    if not settings.exists():
+        return
+
+    try:
+        data = json.loads(settings.read_text())
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return  # Already caught by check_settings
+
+    mcp = data.get("mcpServers", {})
+    if not mcp:
+        # Not an error — many projects don't need MCP
+        return
+
+    server_count = len(mcp)
+
+    # Warn if too many MCP servers (startup latency)
+    if server_count > 5:
+        result.add_issue("warning",
+            f"{server_count} MCP servers configured — may slow startup",
+            "Remove unused MCP servers. Aim for 1-3")
+
+    for name, config in mcp.items():
+        if not isinstance(config, dict):
+            result.add_issue("error",
+                f"MCP server '{name}' has invalid config (expected object)",
+                f"Fix mcpServers.{name} in settings.json")
+            continue
+
+        # Check required fields
+        if "command" not in config:
+            result.add_issue("error",
+                f"MCP server '{name}' missing 'command' field",
+                f"Add 'command' to mcpServers.{name}")
+
+        # Check for hardcoded secrets
+        env = config.get("env", {})
+        for env_key, env_val in env.items():
+            if isinstance(env_val, str) and not env_val.startswith("${") and len(env_val) > 20:
+                if any(word in env_key.upper() for word in ["TOKEN", "SECRET", "KEY", "PASSWORD"]):
+                    result.add_issue("error",
+                        f"MCP server '{name}' has hardcoded secret in {env_key}",
+                        f"Use ${{ENV_VAR}} syntax: \"{env_key}\": \"${{{env_key}}}\"")
+
+    result.add_component(f"MCP Servers ({server_count})", server_count * 3, budget_warn=15, budget_fail=30)
+
+
 def check_handoff(project_dir: Path, result: AuditResult):
     """Check handoff document exists."""
     handoff = project_dir / ".claude" / "handoff.md"
@@ -268,6 +317,7 @@ def audit(project_dir: Path) -> AuditResult:
     check_rules(project_dir, result)
     check_settings(project_dir, result)
     check_staleness(project_dir, result)
+    check_mcp_servers(project_dir, result)
     check_handoff(project_dir, result)
     check_total_budget(result)
 

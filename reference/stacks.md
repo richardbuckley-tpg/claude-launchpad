@@ -106,3 +106,52 @@ Quick-reference for stack-specific patterns. Read the section matching the user'
 
 ### AWS
 - **Conventions**: Verify credentials with `aws sts get-caller-identity`. Build before deploy. Check CloudWatch for deployment logs.
+
+## MCP Servers
+
+MCP (Model Context Protocol) servers extend Claude Code with external tool access. Configure in `.claude/settings.json` under `mcpServers`.
+
+### GitHub MCP
+- **Package**: `@modelcontextprotocol/server-github`
+- **Env**: `GITHUB_PERSONAL_ACCESS_TOKEN` — needs `repo`, `read:org` scopes
+- **Capabilities**: Create/read issues, PRs, branches, file contents, search repos
+- **When to add**: Any project hosted on GitHub (most projects)
+- **Anti-pattern**: Don't add if project uses GitLab or Bitbucket
+
+### GitLab MCP
+- **Package**: `@modelcontextprotocol/server-gitlab`
+- **Env**: `GITLAB_PERSONAL_ACCESS_TOKEN`, `GITLAB_API_URL`
+- **Capabilities**: Issues, merge requests, pipelines, file operations
+- **When to add**: GitLab-hosted projects or GitLab CI users
+
+### PostgreSQL MCP
+- **Package**: `@modelcontextprotocol/server-postgres`
+- **Env**: `DATABASE_URL` — standard connection string
+- **Capabilities**: Run read-only queries, inspect schema, list tables
+- **When to add**: Projects with PostgreSQL. Great for debugging data issues
+- **Anti-pattern**: Don't use for write operations — read-only by design
+
+### SQLite MCP
+- **Package**: `@modelcontextprotocol/server-sqlite`
+- **Capabilities**: Query SQLite databases, inspect schema
+- **When to add**: SQLite projects, local dev databases, Turso
+
+### Filesystem MCP
+- **Package**: `@modelcontextprotocol/server-filesystem`
+- **Args**: Pass allowed directories (e.g., `./docs`, `./specs`)
+- **Capabilities**: Read/write files in allowed directories
+- **When to add**: Team projects with docs/specs outside the main codebase
+- **Anti-pattern**: Don't add root `/` — scope to specific directories
+
+### Sentry MCP
+- **Package**: `@modelcontextprotocol/server-sentry`
+- **Env**: `SENTRY_AUTH_TOKEN`
+- **Capabilities**: Query issues, events, releases, performance data
+- **When to add**: Projects using Sentry for error monitoring
+
+### Selection Logic
+- **Always**: GitHub/GitLab MCP (match git platform)
+- **If database**: PostgreSQL/SQLite MCP for schema inspection
+- **If team**: Filesystem MCP for shared docs
+- **If monitoring**: Sentry MCP for error context
+- **Total**: Aim for 1-3 MCP servers. More adds startup latency

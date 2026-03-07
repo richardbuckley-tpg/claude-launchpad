@@ -325,6 +325,62 @@ Add AI feature: $ARGUMENTS
     return skills
 
 
+# ── MCP Servers ─────────────────────────────────────────────────────────
+
+def get_mcp_servers(args):
+    """Return MCP server configurations based on interview answers."""
+    servers = {}
+
+    git = args.git_platform or "none"
+
+    # GitHub MCP — most common, high value
+    if git == "github":
+        servers["github"] = {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-github"],
+            "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"}
+        }
+
+    # GitLab MCP
+    if git == "gitlab":
+        servers["gitlab"] = {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-gitlab"],
+            "env": {
+                "GITLAB_PERSONAL_ACCESS_TOKEN": "${GITLAB_TOKEN}",
+                "GITLAB_API_URL": "https://gitlab.com/api/v4"
+            }
+        }
+
+    # Database MCP servers
+    db = args.database or "none"
+    if db in ("postgresql", "sqlite", "mysql"):
+        servers["database"] = {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-postgres"] if db == "postgresql"
+                else ["-y", "@modelcontextprotocol/server-sqlite"] if db == "sqlite"
+                else ["-y", "@anthropic/server-mysql"],
+            "env": {"DATABASE_URL": "${DATABASE_URL}"} if db != "sqlite" else {}
+        }
+
+    # Filesystem MCP — useful for docs-heavy projects
+    if args.team:
+        servers["filesystem"] = {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "./docs", "./specs"]
+        }
+
+    # Sentry MCP — if user specified sentry in their monitoring
+    if getattr(args, 'sentry', False):
+        servers["sentry"] = {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-sentry"],
+            "env": {"SENTRY_AUTH_TOKEN": "${SENTRY_AUTH_TOKEN}"}
+        }
+
+    return servers
+
+
 # ── Supporting file generators ───────────────────────────────────────────
 
 def get_claudeignore(frontend, backend):
@@ -384,6 +440,13 @@ def get_env_example(database, auth, ai):
     if ai:
         lines.extend(["", "ANTHROPIC_API_KEY=sk-ant-...", "# OPENAI_API_KEY=sk-..."])
 
+    # MCP-related env vars
+    mcp_vars = []
+    if database in ("postgresql", "mysql"):
+        pass  # DATABASE_URL already added above
+    if auth == "none":
+        pass  # No additional env vars
+
     return "\n".join(lines) + "\n"
 
 
@@ -413,13 +476,70 @@ def get_handoff(project_name):
 
 # ── Main scaffold logic ─────────────────────────────────────────────────
 
+def safe_write(filepath: Path, content: str, force: bool = False, update: bool = False) -> str:
+    """Write a file safely with multiple modes.
+
+    Modes:
+        default:  Skip if file exists
+        force:    Always overwrite
+        update:   Write only if file doesn't exist (same as default — update logic is in scaffold)
+
+    Returns: 'created', 'skipped', or 'overwritten'
+    """
+    existed = filepath.exists()
+    if existed and not force:
+        return "skipped"
+    filepath.write_text(content)
+    return "overwritten" if existed else "created"
+
+
+def merge_settings(existing_path: Path, new_settings: dict) -> tuple[dict, list[str]]:
+    """Merge new settings into existing settings.json without losing user config.
+
+    Returns: (merged_dict, list_of_changes)
+    """
+    changes = []
+    try:
+        existing = json.loads(existing_path.read_text())
+    except (json.JSONDecodeError, FileNotFoundError):
+        return new_settings, ["Created new settings.json"]
+
+    # Merge MCP servers — add missing, don't touch existing
+    if "mcpServers" in new_settings:
+        if "mcpServers" not in existing:
+            existing["mcpServers"] = {}
+        for name, config in new_settings["mcpServers"].items():
+            if name not in existing["mcpServers"]:
+                existing["mcpServers"][name] = config
+                changes.append(f"Added MCP server: {name}")
+            # Don't touch existing MCP server configs
+
+    return existing, changes
+
+
 def scaffold(args):
     """Main scaffold function."""
     output_dir = Path(args.output_dir).resolve()
     project_dir = output_dir / args.project_name if args.create_root else output_dir
+    force = args.force
+    update = args.update
+
+    if force and update:
+        print("Error: --force and --update are mutually exclusive.", file=sys.stderr)
+        return 1
 
     if args.create_root:
         project_dir.mkdir(parents=True, exist_ok=True)
+
+    # Detect existing .claude/ and warn
+    existing_claude = (project_dir / ".claude").exists()
+    if existing_claude and not force and not update:
+        print(f"⚠  Existing .claude/ detected in {project_dir}")
+        print("   Existing files will NOT be overwritten. Only missing files will be created.")
+        print("   Use --update to merge new config into existing files.")
+        print("   Use --force to overwrite everything (backs up nothing — use git).\n")
+    elif update:
+        print(f"📦  Update mode: merging new config into existing .claude/ in {project_dir}\n")
 
     print(f"Scaffolding {args.project_name} in {project_dir}")
     print(f"  Frontend: {args.frontend}, Backend: {args.backend}, DB: {args.database}")
@@ -440,31 +560,85 @@ def scaffold(args):
         commands["tdd"] = cmd_tdd()
     if args.team:
         commands["pipeline"] = cmd_pipeline()
+    created_cmds, skipped_cmds = 0, 0
     for name, content in commands.items():
-        (cmds_dir / f"{name}.md").write_text(content)
-    print(f"  Created {len(commands)} commands: {', '.join('/' + n for n in commands)}")
+        result = safe_write(cmds_dir / f"{name}.md", content, force)
+        if result == "skipped":
+            skipped_cmds += 1
+        else:
+            created_cmds += 1
+    msg = f"  Created {created_cmds} commands"
+    if skipped_cmds:
+        msg += f" (skipped {skipped_cmds} existing)"
+    print(msg)
 
     # 3. Skills
     skills_dir = project_dir / ".claude" / "skills"
     skills = get_skills(args)
+    created_skills, skipped_skills = 0, 0
     for name, content in skills:
-        (skills_dir / f"{name}.md").write_text(content)
-    print(f"  Created {len(skills)} skills: {', '.join(s[0] for s in skills)}")
+        result = safe_write(skills_dir / f"{name}.md", content, force)
+        if result == "skipped":
+            skipped_skills += 1
+        else:
+            created_skills += 1
+    msg = f"  Created {created_skills} skills"
+    if skipped_skills:
+        msg += f" (skipped {skipped_skills} existing)"
+    print(msg)
 
     # 4. Supporting files
-    (project_dir / ".claudeignore").write_text(get_claudeignore(args.frontend, args.backend))
-    (project_dir / ".env.example").write_text(get_env_example(args.database, args.auth or "none", args.ai))
-    (project_dir / ".claude" / "handoff.md").write_text(get_handoff(args.project_name))
-    print("  Created .claudeignore, .env.example, handoff.md")
+    results = []
+    results.append(("claudeignore", safe_write(project_dir / ".claudeignore", get_claudeignore(args.frontend, args.backend), force)))
+    results.append(("env.example", safe_write(project_dir / ".env.example", get_env_example(args.database, args.auth or "none", args.ai), force)))
+    results.append(("handoff.md", safe_write(project_dir / ".claude" / "handoff.md", get_handoff(args.project_name), force)))
+    created = [n for n, r in results if r != "skipped"]
+    skipped = [n for n, r in results if r == "skipped"]
+    if created:
+        print(f"  Created {', '.join(created)}")
+    if skipped:
+        print(f"  Skipped existing: {', '.join(skipped)}")
 
-    # 5. Placeholder files for Claude to customize with real values
-    for name in ["CLAUDE.md", "ARCHITECTURE.md", ".claude/settings.json"]:
+    # 5. MCP servers
+    mcp_servers = get_mcp_servers(args)
+
+    # 6. settings.json with hooks + MCP
+    settings = {}
+    if mcp_servers:
+        settings["mcpServers"] = mcp_servers
+    settings_path = project_dir / ".claude" / "settings.json"
+    if not settings_path.exists():
+        settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+        if mcp_servers:
+            print(f"  Configured {len(mcp_servers)} MCP servers: {', '.join(mcp_servers.keys())}")
+        else:
+            print("  No MCP servers configured (add later in .claude/settings.json)")
+    elif update:
+        # Merge new MCP servers into existing settings without touching user config
+        merged, changes = merge_settings(settings_path, settings)
+        if changes:
+            settings_path.write_text(json.dumps(merged, indent=2) + "\n")
+            for c in changes:
+                print(f"  ✓ {c}")
+        else:
+            print("  settings.json already up to date (no new MCP servers to add)")
+    elif force:
+        settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+        if mcp_servers:
+            print(f"  Configured {len(mcp_servers)} MCP servers: {', '.join(mcp_servers.keys())}")
+    else:
+        print("  Skipped existing settings.json (use --update to merge, --force to overwrite)")
+
+    # 7. Placeholder files for Claude to customize with real values
+    for name in ["CLAUDE.md", "ARCHITECTURE.md"]:
         fp = project_dir / name
-        if not fp.exists():
-            fp.write_text("{}\n" if name.endswith(".json") else "<!-- Generated by Claude Launchpad — Claude will customize -->\n")
-    print("  Created placeholders (CLAUDE.md, ARCHITECTURE.md, settings.json)")
+        result = safe_write(fp, "<!-- Generated by Claude Launchpad — Claude will customize -->\n", force)
+        if result == "skipped":
+            print(f"  Skipped existing {name}")
+        else:
+            print(f"  Created placeholder {name}")
 
-    # 6. Config metadata
+    # 8. Config metadata
     metadata = {
         "project_name": args.project_name,
         "frontend": args.frontend, "backend": args.backend,
@@ -476,7 +650,16 @@ def scaffold(args):
         "scaffolded_at": datetime.now().isoformat(),
         "version": "4.0.0",
     }
-    (project_dir / ".claude" / "launchpad-config.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    config_path = project_dir / ".claude" / "launchpad-config.json"
+    if update and config_path.exists():
+        # Preserve original scaffold date, update the rest
+        try:
+            existing_meta = json.loads(config_path.read_text())
+            metadata["scaffolded_at"] = existing_meta.get("scaffolded_at", metadata["scaffolded_at"])
+            metadata["updated_at"] = datetime.now().isoformat()
+        except (json.JSONDecodeError, FileNotFoundError):
+            pass
+    config_path.write_text(json.dumps(metadata, indent=2) + "\n")
 
     print(f"\nDone! {len(commands)} commands, {len(skills)} skills generated.")
     print("Next: Claude generates CLAUDE.md, agents, rules, hooks, ARCHITECTURE.md with real values.")
@@ -496,6 +679,9 @@ def main():
     p.add_argument("--team", action="store_true")
     p.add_argument("--tdd", action="store_true")
     p.add_argument("--conventional-commits", action="store_true")
+    p.add_argument("--sentry", action="store_true", help="Add Sentry MCP server")
+    p.add_argument("--force", action="store_true", help="Overwrite existing files (default: skip existing)")
+    p.add_argument("--update", action="store_true", help="Merge new config into existing files (add missing commands/skills/MCP)")
     p.add_argument("--output-dir", default=".")
     p.add_argument("--create-root", action="store_true")
     args = p.parse_args()

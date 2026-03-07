@@ -94,8 +94,10 @@ Capture: `hosting`, `git_platform`, `conventional_commits`, `ci_cd`
 
 - **Do you want TDD support?** (Adds `/tdd` command and auto-test hooks)
 - **Any MCP servers to configure?** (GitHub, Sentry, database, Figma)
+  Read `reference/stacks.md` → MCP Servers section for available options and selection logic.
+  Auto-suggest based on answers: GitHub platform → GitHub MCP, PostgreSQL → Postgres MCP, etc.
 
-Summarize all decisions in a table. Get confirmation before generating.
+Summarize all decisions in a table (include MCP servers row). Get confirmation before generating.
 
 ---
 
@@ -113,22 +115,35 @@ python <skill-path>/scripts/scaffold.py \
   --hosting "{hosting}" \
   --git-platform "{git_platform}" \
   --output-dir "." \
-  [--team] [--tdd] [--conventional-commits] [--ai] [--create-root]
+  [--team] [--tdd] [--conventional-commits] [--ai] [--sentry] [--create-root]
 ```
 
-This creates: directory structure, .claude/ skeleton, slash commands, skills, .claudeignore, .env.example, handoff doc.
+This creates: directory structure, .claude/ skeleton, slash commands, skills, MCP server config, .claudeignore, .env.example, handoff doc.
 
-> **Existing projects**: Skip the scaffold. Work with existing directory structure.
+> **Existing projects**: Run with `--update` to merge new commands/skills/MCP into existing config:
+> ```bash
+> python <skill-path>/scripts/scaffold.py --project-name "{project_name}" ... --update --output-dir "."
+> ```
+> This adds missing files without touching existing ones. MCP servers are merged into settings.json.
 
 ### Step 2: Generate CLAUDE.md (≤100 lines)
 
-Read `templates/claude-md.md` for the template. Fill ALL values with real data from the interview.
-No placeholders. The CLAUDE.md must contain the actual `test_cmd`, `lint_cmd`, `dev_cmd`, etc.
+> **Existing project with CLAUDE.md**: Do NOT overwrite. Read the existing CLAUDE.md first.
+> Compare it against `templates/claude-md.md` and suggest additions/improvements. Only modify
+> with the user's explicit permission. Show a diff of proposed changes.
+
+For new projects: Read `templates/claude-md.md` for the template. Fill ALL values with real data
+from the interview. No placeholders. The CLAUDE.md must contain the actual `test_cmd`, `lint_cmd`,
+`dev_cmd`, etc.
 
 Key sections: Tech Stack, Commands (real values), Architecture (2-3 sentences), Code Conventions
 (stack-specific from `reference/stacks.md`), Mistakes to Avoid, Key Paths, Repository conventions.
 
 ### Step 3: Generate Agents (6 × ≤30 lines each)
+
+> **Existing project with agents**: List existing agents first. Only create agents that don't
+> already exist. Never overwrite an existing agent file. If an existing agent could be improved,
+> show the suggested changes and ask permission before modifying.
 
 Read `reference/agents.md` for all 6 templates. Customize each with:
 - The project's actual stack names and paths
@@ -139,13 +154,21 @@ Agents: architect, security, testing, reviewer, debugger, push
 
 ### Step 4: Generate Rules (≤20 lines each)
 
+> **Existing project with rules**: List existing rules first. Only create rules for paths that
+> don't already have coverage. Never overwrite existing rule files. If an existing rule is stale
+> or could be improved, show the diff and ask permission.
+
 Create path-scoped rules based on the stack. Reference `reference/stacks.md` "Rules target" sections.
 Typical rules:
 - `frontend.md` — Component/page conventions for the chosen framework
 - `backend.md` — API endpoint conventions (validation, error handling, auth)
 - `database.md` — Migration rules, schema conventions for the chosen ORM
 
-### Step 5: Generate Hooks (settings.json)
+### Step 5: Generate Hooks & Settings
+
+> **Existing project with settings.json**: Read the existing file first. NEVER overwrite it.
+> Merge new hooks alongside existing ones. If there are conflicts (e.g., user already has a
+> PostToolUse hook and you want to add one), show both and ask which to keep or how to combine.
 
 Based on interview:
 - **All projects**: Block `git push --force` to main, secret detection
@@ -154,12 +177,23 @@ Based on interview:
 - **Conventional commits**: Commit message validation
 - **Stop hook**: Remind to run `/handoff`
 
-### Step 6: Generate ARCHITECTURE.md
+### Step 6: Customize MCP & Settings
 
-Read `templates/architecture.md`. Fill with real values. Include mermaid diagram showing
-how frontend → backend → database → auth connect.
+The scaffold generates initial `settings.json` with MCP servers. Now customize:
+- **Add hooks** from the interview (auto-lint, auto-test, force-push block, conventional commits)
+- **Verify MCP servers** — check env vars are documented in `.env.example`
+- **Add any extra MCP servers** the user requested beyond auto-detected ones
+- Reference `reference/stacks.md` → MCP Servers section for config details
 
-### Step 7: Run Audit
+### Step 7: Generate ARCHITECTURE.md
+
+> **Existing project with ARCHITECTURE.md**: Do NOT overwrite. Read the existing file,
+> compare against `templates/architecture.md`, suggest improvements. Only modify with permission.
+
+For new projects: Read `templates/architecture.md`. Fill with real values. Include mermaid diagram
+showing how frontend → backend → database → auth connect.
+
+### Step 8: Run Audit
 
 After generation, run the auditor to verify quality:
 
@@ -169,7 +203,7 @@ python <skill-path>/scripts/audit.py <project-root>
 
 Show the health score and token estimate. Fix any issues before presenting to user.
 
-### Step 8: Present Results
+### Step 9: Present Results
 
 1. Show the directory tree of generated files
 2. Show CLAUDE.md content for review
@@ -219,12 +253,12 @@ Fixes
   2. Update CLAUDE.md line 47: change pytest → jest
 ```
 
-### Auto-Fix
+### Fixing Issues
 
-With `--fix`, the auditor applies safe fixes automatically:
-- Remove references to non-existent paths
-- Fix line count issues by suggesting what to move to ARCHITECTURE.md
-- Remove duplicate rules
+The auditor reports issues with specific fix suggestions. Apply fixes manually or ask Claude to help.
+Each issue includes the exact file, line, and recommended change.
+
+> Note: The `--fix` flag is reserved for future use. Currently all fixes require review.
 
 ---
 
