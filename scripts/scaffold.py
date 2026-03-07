@@ -19,6 +19,16 @@ from pathlib import Path
 
 PROJECT_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*$')
 
+# Allowlist for user-provided commands (--lint-cmd, --test-cmd)
+# Only permit known safe command patterns to prevent injection
+SAFE_CMD_PATTERN = re.compile(
+    r'^(?:npm|npx|pnpm|yarn|bun) (?:run |exec |dlx )?[a-zA-Z0-9:_-]+(?:\s+--[a-zA-Z0-9_-]+(?:=[a-zA-Z0-9_./-]+)?)*$'
+    r'|^(?:pytest|ruff|mypy|black|flake8|pylint|isort)(?:\s+[a-zA-Z0-9_./-]+)*(?:\s+--[a-zA-Z0-9_-]+(?:=[a-zA-Z0-9_./-]+)?)*$'
+    r'|^(?:go (?:test|vet|fmt)|golangci-lint run)(?:\s+[./a-zA-Z0-9_-]+)*$'
+    r'|^(?:cargo (?:test|clippy|fmt|check))(?:\s+--[a-zA-Z0-9_-]+)*$'
+    r'|^make\s+[a-zA-Z0-9_-]+$'
+)
+
 
 # ── Slash Commands ───────────────────────────────────────────────────────
 
@@ -367,10 +377,19 @@ def get_mcp_servers(args):
     # Note: MySQL MCP not included — no verified official package yet
 
     # Filesystem MCP — useful for docs-heavy projects
+    # Only add if docs/ or specs/ directories actually exist (checked at generation time)
     if args.team:
+        output_dir = Path(args.output_dir).resolve()
+        project_dir = output_dir / args.project_name if args.create_root else output_dir
+        fs_paths = []
+        for d in ["docs", "specs", "design"]:
+            if (project_dir / d).exists():
+                fs_paths.append(f"./{d}")
+        if not fs_paths:
+            fs_paths = ["./docs"]  # Default — will be created by scaffold
         servers["filesystem"] = {
             "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-filesystem", "./docs", "./specs"]
+            "args": ["-y", "@modelcontextprotocol/server-filesystem"] + fs_paths
         }
 
     # Sentry MCP — if user specified sentry in their monitoring
@@ -402,22 +421,24 @@ def get_hooks(args):
         }]
     })
 
-    # All projects: block committing secrets
+    # All projects: block committing secrets via git
+    # Scoped to Bash + git add/commit to avoid false positives in source code edits
     pre_hooks.append({
-        "matcher": "Write|Edit",
+        "matcher": "Bash",
         "hooks": [{
             "type": "block",
-            "pattern": "(?:sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36}|AKIA[0-9A-Z]{16})"
+            "pattern": "git\\s+(?:add|commit).*(?:sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36}|AKIA[0-9A-Z]{16})"
         }]
     })
 
     # Conventional commits: validate commit message format
+    # Only blocks `git commit -m` with non-conventional prefix; allows --amend, -F, editor mode
     if args.conventional_commits:
         pre_hooks.append({
             "matcher": "Bash",
             "hooks": [{
                 "type": "block",
-                "pattern": "git commit(?!.*-m ['\"]?(feat|fix|refactor|test|docs|chore|ci|style|perf|build|revert))"
+                "pattern": "git commit\\s+-m\\s+['\"](?!(feat|fix|refactor|test|docs|chore|ci|style|perf|build|revert)[(:!])"
             }]
         })
 
@@ -427,37 +448,42 @@ def get_hooks(args):
     # PostToolUse hooks
     post_hooks = []
 
-    # Auto-lint on file edits
+    # Auto-lint on source file edits (skip .md, .json, .yaml, config files)
     lint_cmd = getattr(args, 'lint_cmd', None)
-    if lint_cmd:
+    if lint_cmd and SAFE_CMD_PATTERN.match(lint_cmd):
         post_hooks.append({
             "matcher": "Write|Edit",
             "hooks": [{
                 "type": "command",
-                "command": lint_cmd
+                "command": f"case \"$CLAUDE_FILE\" in *.md|*.json|*.yaml|*.yml|*.txt|*.env*|.claudeignore|.gitignore) ;; *) {lint_cmd} ;; esac"
             }]
         })
+    elif lint_cmd:
+        print(f"  ⚠ Skipping --lint-cmd: '{lint_cmd}' doesn't match allowed patterns.", file=sys.stderr)
+        print(f"    Allowed: npm/pnpm/yarn run <script>, pytest, ruff, mypy, go test, cargo test, make <target>", file=sys.stderr)
 
-    # Auto-test on file edits (TDD mode)
+    # Auto-test on source file edits (TDD mode, skip non-source files)
     test_cmd = getattr(args, 'test_cmd', None)
-    if args.tdd and test_cmd:
+    if args.tdd and test_cmd and SAFE_CMD_PATTERN.match(test_cmd):
         post_hooks.append({
             "matcher": "Write|Edit",
             "hooks": [{
                 "type": "command",
-                "command": test_cmd
+                "command": f"case \"$CLAUDE_FILE\" in *.md|*.json|*.yaml|*.yml|*.txt|*.env*|.claudeignore|.gitignore) ;; *) {test_cmd} ;; esac"
             }]
         })
+    elif args.tdd and test_cmd:
+        print(f"  ⚠ Skipping --test-cmd: '{test_cmd}' doesn't match allowed patterns.", file=sys.stderr)
 
     if post_hooks:
         hooks["PostToolUse"] = post_hooks
 
-    # Stop hook: remind to update handoff
+    # Stop hook: remind to update handoff (only if handoff.md hasn't been updated recently)
     hooks["Stop"] = [{
         "matcher": "",
         "hooks": [{
             "type": "command",
-            "command": "echo '💡 Remember to run /handoff to preserve session context'"
+            "command": "if [ -f .claude/handoff.md ] && [ $(find .claude/handoff.md -mmin +30 2>/dev/null | wc -l) -gt 0 ]; then echo '💡 Handoff is >30min old — consider running /handoff'; fi"
         }]
     }]
 

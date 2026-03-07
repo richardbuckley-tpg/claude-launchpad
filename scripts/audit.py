@@ -23,6 +23,10 @@ from pathlib import Path
 
 TOKENS_PER_LINE = 4  # Conservative heuristic for markdown with code
 
+# Comparison baselines (estimated from default configs as of 2025)
+BASELINE_ECC_TOKENS = 7200
+BASELINE_STARTER_KIT_TOKENS = 5100
+
 
 def count_lines(filepath: Path) -> int:
     """Count non-empty lines in a file."""
@@ -386,13 +390,13 @@ def format_report(result: AuditResult) -> str:
     lines.extend([
         "",
         "Comparison",
-        f"  ECC default:         ~7,200 tokens",
-        f"  Starter Kit default: ~5,100 tokens",
+        f"  ECC default:         ~{BASELINE_ECC_TOKENS:,d} tokens",
+        f"  Starter Kit default: ~{BASELINE_STARTER_KIT_TOKENS:,d} tokens",
         f"  Your config:         ~{result.total_tokens:,d} tokens",
     ])
 
     if result.total_tokens > 0:
-        pct = round((1 - result.total_tokens / 7200) * 100)
+        pct = round((1 - result.total_tokens / BASELINE_ECC_TOKENS) * 100)
         if pct > 0:
             lines.append(f"  ({pct}% more efficient than ECC)")
 
