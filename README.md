@@ -25,12 +25,14 @@ Three things set Launchpad apart:
 Clone into your Claude Code skills directory:
 
 ```bash
-# Option 1: Clone directly
+# Global (available to all projects)
 git clone https://github.com/yourusername/claude-launchpad.git ~/.claude/skills/claude-launchpad
 
-# Option 2: Add to a project
+# Per-project (lives in the project repo)
 git clone https://github.com/yourusername/claude-launchpad.git .claude/skills/claude-launchpad
 ```
+
+Trigger phrases: "bootstrap", "scaffold", "set up Claude Code", "init project", "start a project", "new app", "audit my config"
 
 ## Quick Start
 

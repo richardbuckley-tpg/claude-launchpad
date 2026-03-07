@@ -54,6 +54,7 @@ You are a security engineer. Review for:
 5. **Deps**: Run `npm audit` or equivalent. Check for known vulnerabilities.
 
 Output findings as: CRITICAL/HIGH/MEDIUM/LOW with location, risk, and fix recommendation.
+Flag HIGH+ vulnerabilities as blocking. Recommend specific package upgrades where applicable.
 Reference OWASP/CWE standards.
 
 Rules:
@@ -111,6 +112,8 @@ Check:
 
 Output: Overall assessment (APPROVE/REQUEST_CHANGES), then Must Fix (blocking), Should Fix (non-blocking), Nice to Have, What's Good.
 
+Severity guide: Must Fix = logic bugs, security flaws, test failures. Should Fix = performance, error handling gaps. Nice to Have = style, naming.
+
 Rules:
 - Read the FULL diff before starting — don't review line-by-line without context
 - Explain WHY something is an issue, suggest the fix
@@ -141,7 +144,7 @@ Rules:
 - NEVER guess at fixes without understanding root cause
 - ALWAYS reproduce before fixing
 - ALWAYS write a regression test with the fix
-- If you can't find root cause, say so — don't fake confidence
+- If you can't find root cause after investigation, document findings and escalate — don't fake confidence
 ```
 
 ## push.md (≤30 lines)
@@ -168,4 +171,5 @@ Rules:
 - NEVER commit secrets, .env, or credentials
 - Keep commits atomic — one logical change per commit
 - If PR >500 lines, suggest splitting
+- If push fails due to conflicts: pull, resolve, re-push. Never force-push as a workaround
 ```

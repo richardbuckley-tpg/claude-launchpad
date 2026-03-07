@@ -12,9 +12,12 @@ Usage:
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
+
+PROJECT_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*$')
 
 
 # ── Slash Commands ───────────────────────────────────────────────────────
@@ -354,14 +357,14 @@ def get_mcp_servers(args):
 
     # Database MCP servers
     db = args.database or "none"
-    if db in ("postgresql", "sqlite", "mysql"):
+    if db in ("postgresql", "sqlite"):
         servers["database"] = {
             "command": "npx",
             "args": ["-y", "@modelcontextprotocol/server-postgres"] if db == "postgresql"
-                else ["-y", "@modelcontextprotocol/server-sqlite"] if db == "sqlite"
-                else ["-y", "@anthropic/server-mysql"],
+                else ["-y", "@modelcontextprotocol/server-sqlite"],
             "env": {"DATABASE_URL": "${DATABASE_URL}"} if db != "sqlite" else {}
         }
+    # Note: MySQL MCP not included — no verified official package yet
 
     # Filesystem MCP — useful for docs-heavy projects
     if args.team:
@@ -379,6 +382,86 @@ def get_mcp_servers(args):
         }
 
     return servers
+
+
+# ── Hooks ───────────────────────────────────────────────────────────────
+
+def get_hooks(args):
+    """Return hooks configuration based on interview answers."""
+    hooks = {}
+
+    # PreToolUse hooks
+    pre_hooks = []
+
+    # All projects: block force-push to main
+    pre_hooks.append({
+        "matcher": "Bash",
+        "hooks": [{
+            "type": "block",
+            "pattern": "git push.*--force.*main|git push.*--force.*master|git push -f.*main|git push -f.*master"
+        }]
+    })
+
+    # All projects: block committing secrets
+    pre_hooks.append({
+        "matcher": "Write|Edit",
+        "hooks": [{
+            "type": "block",
+            "pattern": "(?:sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36}|AKIA[0-9A-Z]{16})"
+        }]
+    })
+
+    # Conventional commits: validate commit message format
+    if args.conventional_commits:
+        pre_hooks.append({
+            "matcher": "Bash",
+            "hooks": [{
+                "type": "block",
+                "pattern": "git commit(?!.*-m ['\"]?(feat|fix|refactor|test|docs|chore|ci|style|perf|build|revert))"
+            }]
+        })
+
+    if pre_hooks:
+        hooks["PreToolUse"] = pre_hooks
+
+    # PostToolUse hooks
+    post_hooks = []
+
+    # Auto-lint on file edits
+    lint_cmd = getattr(args, 'lint_cmd', None)
+    if lint_cmd:
+        post_hooks.append({
+            "matcher": "Write|Edit",
+            "hooks": [{
+                "type": "command",
+                "command": lint_cmd
+            }]
+        })
+
+    # Auto-test on file edits (TDD mode)
+    test_cmd = getattr(args, 'test_cmd', None)
+    if args.tdd and test_cmd:
+        post_hooks.append({
+            "matcher": "Write|Edit",
+            "hooks": [{
+                "type": "command",
+                "command": test_cmd
+            }]
+        })
+
+    if post_hooks:
+        hooks["PostToolUse"] = post_hooks
+
+    # Stop hook: remind to update handoff
+    hooks["Stop"] = [{
+        "matcher": "",
+        "hooks": [{
+            "type": "command",
+            "command": "echo '💡 Remember to run /handoff to preserve session context'"
+        }]
+    }]
+
+    return hooks
 
 
 # ── Supporting file generators ───────────────────────────────────────────
@@ -489,7 +572,11 @@ def safe_write(filepath: Path, content: str, force: bool = False, update: bool =
     existed = filepath.exists()
     if existed and not force:
         return "skipped"
-    filepath.write_text(content)
+    try:
+        filepath.write_text(content)
+    except OSError as e:
+        print(f"  ✗ Failed to write {filepath.name}: {e}", file=sys.stderr)
+        return "skipped"
     return "overwritten" if existed else "created"
 
 
@@ -512,7 +599,22 @@ def merge_settings(existing_path: Path, new_settings: dict) -> tuple[dict, list[
             if name not in existing["mcpServers"]:
                 existing["mcpServers"][name] = config
                 changes.append(f"Added MCP server: {name}")
-            # Don't touch existing MCP server configs
+
+    # Merge hooks — add missing hook types, don't duplicate existing matchers
+    if "hooks" in new_settings:
+        if "hooks" not in existing:
+            existing["hooks"] = {}
+        for hook_type, hook_list in new_settings["hooks"].items():
+            if hook_type not in existing["hooks"]:
+                existing["hooks"][hook_type] = hook_list
+                changes.append(f"Added {hook_type} hooks ({len(hook_list)} rules)")
+            else:
+                # Add hooks with matchers that don't already exist
+                existing_matchers = {h.get("matcher", "") for h in existing["hooks"][hook_type] if isinstance(h, dict)}
+                for hook in hook_list:
+                    if isinstance(hook, dict) and hook.get("matcher", "") not in existing_matchers:
+                        existing["hooks"][hook_type].append(hook)
+                        changes.append(f"Added {hook_type} hook: {hook.get('matcher', 'default')}")
 
     return existing, changes
 
@@ -599,11 +701,14 @@ def scaffold(args):
     if skipped:
         print(f"  Skipped existing: {', '.join(skipped)}")
 
-    # 5. MCP servers
+    # 5. MCP servers + hooks
     mcp_servers = get_mcp_servers(args)
+    hooks = get_hooks(args)
 
     # 6. settings.json with hooks + MCP
     settings = {}
+    if hooks:
+        settings["hooks"] = hooks
     if mcp_servers:
         settings["mcpServers"] = mcp_servers
     settings_path = project_dir / ".claude" / "settings.json"
@@ -679,12 +784,20 @@ def main():
     p.add_argument("--team", action="store_true")
     p.add_argument("--tdd", action="store_true")
     p.add_argument("--conventional-commits", action="store_true")
+    p.add_argument("--lint-cmd", default=None, help="Lint command (e.g., 'npm run lint')")
+    p.add_argument("--test-cmd", default=None, help="Test command (e.g., 'npm run test')")
     p.add_argument("--sentry", action="store_true", help="Add Sentry MCP server")
     p.add_argument("--force", action="store_true", help="Overwrite existing files (default: skip existing)")
     p.add_argument("--update", action="store_true", help="Merge new config into existing files (add missing commands/skills/MCP)")
     p.add_argument("--output-dir", default=".")
     p.add_argument("--create-root", action="store_true")
     args = p.parse_args()
+
+    # M1: Validate project name
+    if not PROJECT_NAME_PATTERN.match(args.project_name):
+        print(f"Error: Invalid project name '{args.project_name}'. Use letters, numbers, dots, hyphens, underscores.", file=sys.stderr)
+        sys.exit(1)
+
     sys.exit(scaffold(args))
 
 

@@ -8,7 +8,7 @@ Quick-reference for stack-specific patterns. Read the section matching the user'
 - **Key paths**: `src/app/` (routes), `src/components/ui/` (shared), `src/lib/` (utils), `src/server/actions/` (mutations)
 - **Commands**: `npm run dev`, `npm run build`, `npm run test`, `npm run lint`, `npx tsc --noEmit`
 - **Conventions**: Server Components by default. `"use client"` only when needed. Server Actions for mutations. Zod for all input validation in `src/lib/validations/`. `next/image` for images, `next/link` for links.
-- **Mistakes**: Never `"use client"` at page level without reason. Never import server code in client components. Never put secrets without `NEXT_PUBLIC_` prefix. Always add `loading.tsx` + `error.tsx` per route.
+- **Mistakes**: Never `"use client"` at page level without reason. Never import server code in client components. Never put secrets without `NEXT_PUBLIC_` prefix. Always add `loading.tsx` + `error.tsx` + `not-found.tsx` per route.
 - **Testing**: Vitest + React Testing Library + Playwright. Mock `next/navigation`, `next/headers`.
 - **Rules target**: `src/app/api/**/*.ts` (route handlers must validate with zod, return NextResponse), `src/server/actions/**/*.ts` (must start with `"use server"`, validate input, use revalidatePath)
 
@@ -129,7 +129,7 @@ MCP (Model Context Protocol) servers extend Claude Code with external tool acces
 - **Env**: `DATABASE_URL` — standard connection string
 - **Capabilities**: Run read-only queries, inspect schema, list tables
 - **When to add**: Projects with PostgreSQL. Great for debugging data issues
-- **Anti-pattern**: Don't use for write operations — read-only by design
+- **Anti-pattern**: Don't use for write operations — read-only by design. Use read-only DB credentials
 
 ### SQLite MCP
 - **Package**: `@modelcontextprotocol/server-sqlite`

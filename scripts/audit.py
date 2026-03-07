@@ -12,7 +12,6 @@ Usage:
 """
 
 import argparse
-import glob
 import json
 import os
 import re
@@ -114,10 +113,16 @@ def check_agents(project_dir: Path, result: AuditResult):
         total_agent_lines += lines
         name = af.stem
 
-        # Check for duplicates
-        if name in names_seen:
-            result.add_issue("warning", f"Duplicate agent: {name}", f"Remove duplicate {af.name}")
-        names_seen.add(name)
+        # Check for duplicate agent names in frontmatter
+        try:
+            agent_content = af.read_text()
+            fm_name_match = re.search(r'^name:\s*(.+)$', agent_content, re.MULTILINE)
+            fm_name = fm_name_match.group(1).strip() if fm_name_match else name
+            if fm_name in names_seen:
+                result.add_issue("warning", f"Duplicate agent name '{fm_name}' in {af.name}", f"Remove or rename duplicate agent")
+            names_seen.add(fm_name)
+        except UnicodeDecodeError:
+            names_seen.add(name)
 
         # Check individual agent size
         if lines > 50:
@@ -170,7 +175,7 @@ def check_settings(project_dir: Path, result: AuditResult):
         return
 
     lines = count_lines(settings)
-    result.add_component("settings.json", lines, budget_warn=50, budget_fail=100)
+    result.add_component("settings.json", lines, budget_warn=80, budget_fail=150)
 
     try:
         data = json.loads(settings.read_text())
@@ -223,7 +228,7 @@ def check_staleness(project_dir: Path, result: AuditResult):
             try:
                 content = rf.read_text()
                 # Look for path patterns like src/app/, src/pages/, etc.
-                path_patterns = re.findall(r'(?:src|app|lib|internal)/[\w/]+', content)
+                path_patterns = re.findall(r'(?:src|app|lib|internal|packages|services|tools|components|pages|api|cmd|pkg)/[\w/]+', content)
                 for pattern in path_patterns:
                     # Check if at least the first directory level exists
                     first_dir = pattern.split('/')[0]
@@ -273,14 +278,30 @@ def check_mcp_servers(project_dir: Path, result: AuditResult):
                 f"MCP server '{name}' missing 'command' field",
                 f"Add 'command' to mcpServers.{name}")
 
-        # Check for hardcoded secrets
+        # Check for hardcoded secrets — pattern + heuristic based
+        SECRET_PATTERNS = [
+            r'^sk-[a-zA-Z0-9]{20,}',      # Anthropic/OpenAI keys
+            r'^ghp_[a-zA-Z0-9]{36}',       # GitHub PAT
+            r'^gho_[a-zA-Z0-9]{36}',       # GitHub OAuth
+            r'^glpat-[a-zA-Z0-9\-]{20,}',  # GitLab PAT
+            r'^AKIA[0-9A-Z]{16}',          # AWS access key
+            r'^eyJ[a-zA-Z0-9]{20,}',       # JWT token
+            r'^[a-f0-9]{32,}$',            # Hex strings (generic secrets)
+        ]
         env = config.get("env", {})
         for env_key, env_val in env.items():
-            if isinstance(env_val, str) and not env_val.startswith("${") and len(env_val) > 20:
-                if any(word in env_key.upper() for word in ["TOKEN", "SECRET", "KEY", "PASSWORD"]):
-                    result.add_issue("error",
-                        f"MCP server '{name}' has hardcoded secret in {env_key}",
-                        f"Use ${{ENV_VAR}} syntax: \"{env_key}\": \"${{{env_key}}}\"")
+            if not isinstance(env_val, str) or env_val.startswith("${"):
+                continue
+            is_secret_key = any(word in env_key.upper() for word in ["TOKEN", "SECRET", "KEY", "PASSWORD", "CREDENTIAL"])
+            is_secret_pattern = any(re.match(p, env_val) for p in SECRET_PATTERNS)
+            if is_secret_key and (len(env_val) > 20 or is_secret_pattern):
+                result.add_issue("error",
+                    f"MCP server '{name}' has hardcoded secret in {env_key}",
+                    f"Use ${{ENV_VAR}} syntax: \"{env_key}\": \"${{{env_key}}}\"")
+            elif is_secret_pattern:
+                result.add_issue("warning",
+                    f"MCP server '{name}': {env_key} value looks like a secret",
+                    f"Use ${{ENV_VAR}} syntax instead of hardcoding")
 
     result.add_component(f"MCP Servers ({server_count})", server_count * 3, budget_warn=15, budget_fail=30)
 
@@ -389,6 +410,9 @@ def main():
     if not project_dir.exists():
         print(f"Error: {project_dir} does not exist", file=sys.stderr)
         sys.exit(1)
+
+    if args.fix:
+        print("Warning: --fix is not yet implemented. Showing report only.\n", file=sys.stderr)
 
     result = audit(project_dir)
 

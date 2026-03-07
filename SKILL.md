@@ -45,6 +45,8 @@ Ask conversationally, 2-3 questions at a time. Don't dump all at once.
 
 > **Existing project**: Auto-detect the stack by checking for `package.json`, `requirements.txt`,
 > `go.mod`, `Cargo.toml`, `.claude/` directory. Present findings, only ask about gaps.
+> If multiple frameworks detected (e.g., Next.js + Express in same package.json), list findings
+> and ask user to confirm the primary frontend/backend split.
 
 Capture: `project_name`, `description`, `team`, `architecture`, `is_existing`
 
@@ -65,6 +67,7 @@ Skip questions they've already answered. For existing projects, auto-detect and 
 ### Database
 - **Database + ORM**: PostgreSQL+Prisma, PostgreSQL+Drizzle, PostgreSQL+SQLAlchemy, MongoDB+Mongoose, Supabase, SQLite, or none
 - **What's your migration command?** (e.g., `npx prisma migrate dev`, `alembic upgrade head`)
+  Only ask ORM/migration for SQL databases (PostgreSQL, MySQL, SQLite). Skip for MongoDB, Supabase, DynamoDB.
 
 ### Auth
 - **Provider**: Clerk, NextAuth/Auth.js, Supabase Auth, custom JWT, or none
@@ -115,10 +118,16 @@ python <skill-path>/scripts/scaffold.py \
   --hosting "{hosting}" \
   --git-platform "{git_platform}" \
   --output-dir "." \
-  [--team] [--tdd] [--conventional-commits] [--ai] [--sentry] [--create-root]
+  [--team] [--tdd] [--conventional-commits] [--ai] [--sentry] \
+  [--lint-cmd "{lint_cmd}"] [--test-cmd "{test_cmd}"] [--create-root]
 ```
 
-This creates: directory structure, .claude/ skeleton, slash commands, skills, MCP server config, .claudeignore, .env.example, handoff doc.
+This creates: directory structure, .claude/ skeleton, slash commands, skills, hooks, MCP server config,
+.claudeignore, .env.example, handoff doc.
+
+> **Important**: The scaffold creates the structural files (commands, skills, hooks, MCP, supporting files).
+> Steps 2-7 below are YOUR job as Claude — reading templates, filling real values, and writing
+> agents, rules, CLAUDE.md, and ARCHITECTURE.md. The scaffold does NOT generate these content files.
 
 > **Existing projects**: Run with `--update` to merge new commands/skills/MCP into existing config:
 > ```bash
@@ -150,7 +159,7 @@ Read `reference/agents.md` for all 6 templates. Customize each with:
 - Stack-specific review checks (from `reference/stacks.md`)
 - The project's real test/lint/build commands
 
-Agents: architect, security, testing, reviewer, debugger, push
+Agents: architect, testing, reviewer, debugger, push (always) + security (when auth/payments/user data involved)
 
 ### Step 4: Generate Rules (≤20 lines each)
 
@@ -201,7 +210,10 @@ After generation, run the auditor to verify quality:
 python <skill-path>/scripts/audit.py <project-root>
 ```
 
-Show the health score and token estimate. Fix any issues before presenting to user.
+Show the health score and token estimate. Then act on the score:
+- **Score < 70**: Fix all errors before presenting. Re-run audit to confirm.
+- **Score 70-89**: Fix errors, flag warnings for user review.
+- **Score ≥ 90**: Present as-is. Mention any warnings but don't block.
 
 ### Step 9: Present Results
 
