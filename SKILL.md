@@ -18,18 +18,21 @@ token-efficient Claude Code project in minutes.
 **Philosophy: Less but better.** Every file you generate has strict limits. No bloat, no placeholders,
 no cargo-cult config. Everything contains real values from the interview.
 
-**Three things make this different:**
-1. **Config Auditor** — `/audit` scores any .claude/ setup (yours, ECC, hand-crafted) for health, token cost, and issues
-2. **Token-optimized** — CLAUDE.md ≤100 lines, agents ≤30 lines, total config ~2,800 tokens (vs ~7,200 for ECC)
-3. **Fully rendered** — Generated files contain real commands, real paths, real patterns. No `{placeholder}` stubs.
+**Four things make this different:**
+1. **Codebase Analyzer** — Reads actual code to extract patterns, conventions, and key abstractions. Generates project-specific rules, not generic framework advice.
+2. **Config Auditor** — `/audit` scores any .claude/ setup for health, token cost, and issues
+3. **Learning System** — `/learn` captures corrections so Claude doesn't repeat mistakes. Rules evolve over time.
+4. **Token-optimized** — CLAUDE.md ≤100 lines, agents ≤30 lines. Everything fully rendered with real values.
 
 ## Modes
 
 - **Greenfield** — New project from scratch (full interview → generation)
-- **Existing project** — Adding Claude Code to existing codebase (auto-detect → fill gaps)
+- **Existing project** — Analyze codebase → auto-detect stack → fill gaps → project-specific rules
 - **Audit only** — Score and improve an existing .claude/ configuration
+- **Learn** — Record corrections, analyze git history for mistake patterns
 
-If the user asks to audit, skip to the Audit section. Otherwise, start the interview.
+If the user asks to audit, skip to the Audit section. If they ask to analyze, use the Analyzer.
+Otherwise, start the interview.
 
 ---
 
@@ -43,10 +46,13 @@ Ask conversationally, 2-3 questions at a time. Don't dump all at once.
 - **Greenfield or adding Claude Code to an existing project?**
 - **Architecture**: Monolith or microservices? (Recommend monolith unless they have a reason.)
 
-> **Existing project**: Auto-detect the stack by checking for `package.json`, `requirements.txt`,
-> `go.mod`, `Cargo.toml`, `.claude/` directory. Present findings, only ask about gaps.
-> If multiple frameworks detected (e.g., Next.js + Express in same package.json), list findings
-> and ask user to confirm the primary frontend/backend split.
+> **Existing project**: Run the codebase analyzer first to detect stack AND extract patterns:
+> ```bash
+> python <skill-path>/scripts/analyze.py <project-root>
+> ```
+> This detects frontend, backend, ORM, auth, test framework, AND extracts project-specific
+> patterns (error handling, validation, auth middleware, file organization, key abstractions).
+> Present findings, only ask about gaps the analyzer can't detect (hosting, CI/CD, preferences).
 
 Capture: `project_name`, `description`, `team`, `architecture`, `is_existing`
 
@@ -124,7 +130,7 @@ python <skill-path>/scripts/scaffold.py \
   [--context7] [--sequential-thinking] [--minimal-mcp] \
   [--lint-cmd "{lint_cmd}"] [--test-cmd "{test_cmd}"] \
   [--dev-cmd "{dev_cmd}"] [--build-cmd "{build_cmd}"] \
-  [--migrate-cmd "{migrate_cmd}"] [--create-root]
+  [--migrate-cmd "{migrate_cmd}"] [--analyze] [--create-root]
 ```
 
 This creates: directory structure, .claude/ skeleton, slash commands, skills, agents, rules, hooks,
@@ -226,7 +232,48 @@ Show the health score and token estimate. Then act on the score:
 2. Show CLAUDE.md content for review
 3. Show audit score and token estimate
 4. Ask if anything needs adjustment
-5. Suggest: "Run `/status` to verify, then `/new-feature` to start building"
+5. Suggest next steps:
+   - `/build <feature>` to start building with the full agent pipeline
+   - `/analyze` to extract more patterns as code grows
+   - `/learn <correction>` to teach Claude project-specific preferences
+
+---
+
+## Agent Orchestration
+
+The `/build` command runs the full development pipeline with context passing through blueprints:
+
+1. **Architect** designs → writes blueprint to `docs/blueprints/`
+2. **Security** reviews the blueprint (when auth/payments involved)
+3. **Implement** builds following the blueprint
+4. **Testing** writes tests from the blueprint spec (not implementation)
+5. **Reviewer** checks the full diff
+6. **Push** creates the PR
+
+Blueprints are the shared context. The template is in `docs/blueprints/.template.md`.
+
+---
+
+## Learning System
+
+The `/learn` command captures corrections so Claude doesn't repeat mistakes:
+
+```bash
+# Explicit: record a correction
+python <skill-path>/scripts/learn.py <project-root> --capture "Always use AppError, not generic Error"
+
+# Git analysis: detect correction patterns from commit history
+python <skill-path>/scripts/learn.py <project-root> --from-git
+
+# Show all learned rules
+python <skill-path>/scripts/learn.py <project-root> --show
+
+# Forget a rule
+python <skill-path>/scripts/learn.py <project-root> --forget "AppError"
+```
+
+Learned rules are stored in `.claude/rules/learned.md` and persist across sessions.
+Over time, these rules become a distilled record of project-specific preferences.
 
 ---
 

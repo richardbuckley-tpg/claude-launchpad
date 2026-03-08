@@ -1,12 +1,14 @@
 {
   "name": "claude-launchpad",
-  "version": "5.0.0",
-  "description": "Lean, token-optimized Claude Code bootstrapper with built-in Config Auditor",
+  "version": "6.0.0",
+  "description": "Claude Code bootstrapper with codebase analysis, learning system, and agent orchestration",
   "author": "claude-launchpad contributors",
   "license": "MIT",
   "entry": "SKILL.md",
   "scripts": {
     "scaffold": "python3 scripts/scaffold.py",
+    "analyze": "python3 scripts/analyze.py",
+    "learn": "python3 scripts/learn.py",
     "audit": "python3 scripts/audit.py",
     "test": "python3 -m pytest scripts/ -v"
   },
@@ -16,7 +18,8 @@
   "triggers": [
     "bootstrap", "scaffold", "set up Claude Code", "init project",
     "start a project", "new app", "create a project", "project setup",
-    "audit my config", "check my claude setup", "optimize my claude config"
+    "audit my config", "check my claude setup", "optimize my claude config",
+    "analyze my codebase", "learn from my corrections", "build feature"
   ],
   "capabilities": [
     "scaffold",
@@ -29,7 +32,10 @@
     "mcp",
     "ci-cd",
     "presets",
-    "upgrade"
+    "upgrade",
+    "analyze",
+    "learn",
+    "orchestration"
   ],
   "stacks": [
     "nextjs", "react-vite", "vue", "sveltekit",

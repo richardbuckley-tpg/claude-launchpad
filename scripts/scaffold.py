@@ -18,7 +18,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "5.0.0"
+VERSION = "6.0.0"
 
 PROJECT_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*$')
 
@@ -203,6 +203,72 @@ Pipeline:
 4. **Test**: Write tests (use testing agent)
 5. **Review**: Code review (use reviewer agent)
 6. **Push**: Branch, commit, PR (use push agent)
+"""
+
+def cmd_build():
+    return """---
+description: Full feature pipeline — design, build, test, review, ship
+---
+
+Feature: $ARGUMENTS
+
+Execute the full development pipeline with context passing through blueprints:
+
+1. **Design**: Run `@architect Design the "$ARGUMENTS" feature`
+   - Wait for blueprint in `docs/blueprints/`
+   - Review the blueprint and get approval before continuing
+
+2. **Security** (if auth/payments involved): Run `@security Review the blueprint`
+
+3. **Implement**: Build following the approved blueprint
+   - Read the blueprint first — it's the spec
+   - Follow existing patterns (check `.claude/rules/`)
+   - Create all layers: data model, API, UI, types
+
+4. **Test**: Run `@testing Write tests for "$ARGUMENTS"`
+   - Tests are based on the blueprint, not the implementation
+   - Must pass before continuing
+
+5. **Review**: Run `@reviewer Review all changes`
+   - Must APPROVE before shipping
+
+6. **Ship**: Run `@push Create PR for "$ARGUMENTS"`
+
+Update `.claude/handoff.md` after completion.
+"""
+
+
+def cmd_analyze():
+    return """---
+description: Analyze codebase and generate project-specific rules
+---
+
+Analyze the codebase to detect patterns and generate targeted rules:
+1. Run the analyzer script against this project
+2. Review detected patterns — stack, error handling, auth, validation, testing, etc.
+3. If patterns look correct, write rules with --write-rules
+4. Run the audit to verify the new rules
+5. Show what was generated
+
+This replaces generic framework rules with project-specific ones based on actual code.
+"""
+
+
+def cmd_learn():
+    return """---
+description: Record a correction for Claude to remember
+---
+
+$ARGUMENTS
+
+Record this as a learned rule so Claude doesn't repeat the mistake:
+1. Run the learn script with --capture "$ARGUMENTS"
+2. Confirm the rule was saved to .claude/rules/learned.md
+3. Show all currently learned rules
+
+These rules persist across sessions and get more specific over time.
+To remove a learned rule: run learn script with --forget "<query>"
+To analyze git history for corrections: run learn script with --from-git
 """
 
 
@@ -623,11 +689,13 @@ model: opus
 ---
 
 You are the principal architect for a {fe}/{be} project.
-1. Read CLAUDE.md and ARCHITECTURE.md for current patterns
+1. Read CLAUDE.md, ARCHITECTURE.md, and .claude/rules/ for current patterns
 2. Assess which system parts this touches
 3. Design: data model changes, API contract, components affected
 4. Write blueprint to docs/blueprints/{{feature}}.md
 5. Present trade-offs for non-obvious decisions
+
+Blueprint format: Summary, Data Model Changes, API Changes, Components, Security, Test Plan, Risks.
 
 Rules:
 - Prefer extending existing patterns over new ones
@@ -648,13 +716,13 @@ model: sonnet
 You are a test engineer for a {fe}/{be}/{db} stack.
 Test command: `{test_cmd}`
 
-1. Read the spec/blueprint — do NOT read implementation first
+1. Read the blueprint in docs/blueprints/ — do NOT read implementation first
 2. Design: happy path, edge cases, error conditions, security
 3. Write: unit (mock externals), integration (real DB), E2E (user flows)
 4. Run `{test_cmd}` and verify tests pass
 
 Rules:
-- NEVER read implementation before writing tests
+- NEVER read implementation before writing tests — use the blueprint as spec
 - Test behavior, not internals
 - Each test independent — no shared mutable state
 - STOP if tests require >5 external service mocks — simplify the design
@@ -1178,6 +1246,41 @@ def get_first_feature_guide(args):
     return "\n".join(steps)
 
 
+def get_blueprint_template():
+    """Generate the blueprint template for agent orchestration."""
+    return """# Blueprint: {Feature Name}
+
+## Summary
+<!-- One paragraph: what this feature does and why -->
+
+## Data Model Changes
+<!-- Schema/migration changes needed -->
+- (none)
+
+## API Changes
+<!-- New or modified endpoints -->
+- (none)
+
+## Components
+<!-- UI components to create/modify -->
+- (none)
+
+## Security Considerations
+<!-- Auth, validation, permissions -->
+- (none)
+
+## Test Plan
+<!-- What to test: happy path, edge cases, error conditions -->
+- [ ] Happy path
+- [ ] Error handling
+- [ ] Auth/permissions
+
+## Risks
+<!-- What could go wrong, dependencies, unknowns -->
+- (none)
+"""
+
+
 def get_handoff(project_name):
     """Generate initial handoff document."""
     return f"""# Session Handoff — {project_name}
@@ -1428,6 +1531,7 @@ def scaffold(args):
     commands = {
         "status": cmd_status(), "handoff": cmd_handoff(),
         "new-feature": cmd_new_feature(), "fix-bug": cmd_fix_bug(), "audit": cmd_audit(),
+        "build": cmd_build(), "analyze": cmd_analyze(), "learn": cmd_learn(),
     }
     if args.tdd:
         commands["tdd"] = cmd_tdd()
@@ -1504,6 +1608,7 @@ def scaffold(args):
         ("env.example", ".env.example", get_env_example(args.database, args.auth or "none", args.ai)),
         ("handoff.md", ".claude/handoff.md", get_handoff(args.project_name)),
         ("first-feature.md", "docs/first-feature.md", get_first_feature_guide(args)),
+        ("blueprint-template.md", "docs/blueprints/.template.md", get_blueprint_template()),
     ]
     results = []
     for label, rel_path, content in support_files:
@@ -1757,6 +1862,7 @@ def main():
     p.add_argument("--verify", action="store_true", help="Run post-scaffold verification checks")
     p.add_argument("--preset", choices=list(PRESETS.keys()), default=None, help="Use a preset stack configuration")
     p.add_argument("--upgrade", action="store_true", help="Upgrade existing Launchpad config to current version")
+    p.add_argument("--analyze", action="store_true", help="Analyze existing codebase to generate project-specific rules")
     p.add_argument("--output-dir", default=".")
     p.add_argument("--create-root", action="store_true")
     args = p.parse_args()
@@ -1779,6 +1885,35 @@ def main():
                     setattr(args, key, value)
             elif current is None or current == "none":
                 setattr(args, key, value)
+
+    # Codebase analysis — detect stack and generate project-specific rules
+    if getattr(args, 'analyze', False):
+        try:
+            from analyze import analyze as run_analysis, write_rules as write_analysis_rules
+            output_dir = Path(args.output_dir).resolve()
+            project_dir = output_dir / args.project_name if args.create_root else output_dir
+            if project_dir.exists():
+                print(f"Analyzing codebase in {project_dir}...")
+                analysis = run_analysis(project_dir)
+                # Override args defaults with detected stack
+                stack_to_args = {
+                    "frontend": "frontend", "backend": "backend",
+                    "database": "database", "orm": "orm", "auth": "auth",
+                }
+                for stack_key, arg_key in stack_to_args.items():
+                    detected = analysis.stack.get(stack_key)
+                    if detected and getattr(args, arg_key, None) in (None, "none"):
+                        setattr(args, arg_key, detected)
+                        print(f"  Detected {arg_key}: {detected}")
+                # Write analyzer rules
+                created = write_analysis_rules(project_dir, analysis, force=args.force)
+                if created:
+                    print(f"  Generated {len(created)} project-specific rules from codebase analysis")
+                print()
+            else:
+                print(f"  Skipping analysis — {project_dir} doesn't exist yet")
+        except ImportError:
+            print("  Warning: analyze.py not found, skipping codebase analysis", file=sys.stderr)
 
     # M1: Validate project name
     if not PROJECT_NAME_PATTERN.match(args.project_name):

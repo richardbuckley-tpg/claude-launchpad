@@ -1,6 +1,6 @@
 # Claude Launchpad
 
-A Claude Code skill that bootstraps complete project configurations through a structured interview. Generates agents, rules, skills, commands, hooks, MCP config, CI/CD, and more — all with real values from your answers, not placeholders.
+A Claude Code skill that bootstraps complete project configurations — then keeps them evolving. Generates agents, rules, skills, commands, hooks, MCP config, CI/CD, and more. For existing codebases, analyzes your actual code to generate project-specific rules instead of generic framework advice.
 
 ## Install
 
@@ -56,7 +56,7 @@ Available presets:
 
 Say **"Set up Claude Code for this project"** in an existing codebase.
 
-Launchpad auto-detects your stack from `package.json`, `requirements.txt`, `go.mod`, etc., then fills gaps. Use `--update` mode to merge new config into existing `.claude/` files without overwriting anything.
+Launchpad runs the **codebase analyzer** first — reading your actual source code to detect patterns, conventions, and key abstractions. Then it auto-detects your stack from `package.json`, `requirements.txt`, `go.mod`, etc., and fills gaps through the interview. Use `--analyze` to generate project-specific rules based on real code.
 
 ### Audit Any Config
 
@@ -98,16 +98,21 @@ your-project/
 │   │   ├── debugger.md
 │   │   ├── push.md
 │   │   └── security.md             # (when auth/AI involved)
-│   ├── rules/                       # Path-scoped, stack-specific
+│   ├── rules/                       # Path-scoped + project-specific
 │   │   ├── frontend.md              # (globs: src/app/**/*.tsx)
 │   │   ├── backend.md
-│   │   └── database.md
-│   ├── commands/                    # 5-7 slash commands
+│   │   ├── database.md
+│   │   ├── project-*.md             # (from codebase analyzer)
+│   │   └── learned.md               # (from /learn corrections)
+│   ├── commands/                    # 8-10 slash commands
 │   │   ├── status.md
 │   │   ├── handoff.md
 │   │   ├── new-feature.md
 │   │   ├── fix-bug.md
 │   │   ├── audit.md
+│   │   ├── build.md                 # Full agent pipeline
+│   │   ├── analyze.md               # Codebase analysis
+│   │   ├── learn.md                 # Record corrections
 │   │   ├── tdd.md                   # (when --tdd)
 │   │   └── pipeline.md             # (when --team)
 │   ├── skills/                      # 8-10 stack-specific skills
@@ -119,36 +124,74 @@ your-project/
 │   └── pull_request_template.md
 ├── docs/
 │   ├── first-feature.md             # Step-by-step getting started guide
-│   └── blueprints/                  # Architecture blueprints
+│   └── blueprints/                  # Architecture blueprints (agent context)
+│       └── .template.md             # Blueprint format for /build pipeline
 ├── .claudeignore
 └── .env.example
 ```
 
 ## Key Features
 
+### Codebase Analyzer
+
+For existing projects, the analyzer reads your actual source code and generates targeted rules:
+
+```bash
+python scripts/analyze.py /path/to/project                # See what it detects
+python scripts/analyze.py /path/to/project --write-rules  # Write to .claude/rules/
+```
+
+It detects: error handling patterns, auth middleware, validation libraries, data fetching, state management, file organization, testing conventions, API patterns, database access, and key abstractions (custom hooks, services, repositories).
+
+The difference: instead of "use Server Components by default" (generic), you get "this project uses `AppError` from `src/lib/errors.ts` for all error handling — never throw generic Error" (specific).
+
+### Learning System
+
+The `/learn` command captures corrections so Claude doesn't repeat mistakes:
+
+```
+/learn "Always use zod schemas from src/schemas/, never manual validation"
+/learn "Use AppError, not generic Error"
+```
+
+Corrections are stored in `.claude/rules/learned.md` and persist across sessions. Over time, the rules become a distilled record of your project's preferences. Use `--from-git` to automatically detect correction patterns from commit history.
+
+### Agent Orchestration
+
+The `/build` command runs the full development pipeline with context passing through blueprints:
+
+1. **Architect** designs the feature → writes blueprint to `docs/blueprints/`
+2. **Security** reviews the blueprint (when auth/payments involved)
+3. **Implement** builds following the approved blueprint
+4. **Testing** writes tests from the blueprint spec
+5. **Reviewer** checks the full diff
+6. **Push** creates the PR
+
+Each agent receives the output of the previous one. The blueprint is the shared context.
+
 ### Token-Optimized
+
 Strict line limits keep your config lean: CLAUDE.md ≤100 lines, agents ≤30 lines, rules ≤20 lines. After scaffolding, Launchpad shows the estimated token impact on your context window.
 
 ### Discoverability-First CLAUDE.md
+
 Based on research showing that auto-discoverable content (file trees, import patterns) in CLAUDE.md can hurt task success. The template only includes information Claude can't find by reading your code: commands, architecture decisions, process rules.
 
 ### Real Parameterized Agents
-Each agent is customized with your actual stack, commands, and STOP conditions — not generic templates. The architect agent knows your frontend/backend, the testing agent uses your real test command, the push agent respects your commit conventions.
+
+Each agent is customized with your actual stack, commands, and STOP conditions. The architect knows your frontend/backend, the testing agent uses your real test command, the push agent respects your commit conventions.
 
 ### Path-Scoped Rules
-Rules target specific file patterns with `globs:` frontmatter. A Next.js project gets rules for `src/app/**/*.tsx`, a FastAPI project gets rules for `app/api/**/*.py`. Stack-specific conventions from the interview are baked in.
+
+Rules target specific file patterns with `globs:` frontmatter. A Next.js project gets rules for `src/app/**/*.tsx`, a FastAPI project gets rules for `app/api/**/*.py`. Stack-specific conventions are baked in, and the analyzer adds project-specific rules on top.
 
 ### CI/CD Generation
-Generates GitHub Actions or GitLab CI pipelines with your actual lint, test, and build commands. Detects your runtime (Node, Python, Go, Rust) and configures the right setup steps. Includes a PR template.
+
+Generates GitHub Actions or GitLab CI pipelines with your actual lint, test, and build commands. Detects your runtime (Node, Python, Go, Rust) and configures the right setup steps.
 
 ### Post-Scaffold Verification
+
 Use `--verify` to run checks after scaffolding: directories exist, settings.json is valid, MCP env vars are documented in .env.example, commands pass the safety allowlist.
-
-### Version Upgrades
-Use `--upgrade` to migrate an existing Launchpad config to the latest version. Creates missing directories, adds new files, updates the version — without touching your customizations.
-
-### Community MCP Servers
-Beyond the official MCP servers (GitHub, GitLab, PostgreSQL, SQLite, Sentry), Launchpad supports Context7 (docs lookup) and Sequential Thinking with `--context7` and `--sequential-thinking` flags. Use `--minimal-mcp` to skip community servers.
 
 ## Supported Stacks
 
@@ -163,8 +206,7 @@ Beyond the official MCP servers (GitHub, GitLab, PostgreSQL, SQLite, Sentry), La
 
 ## CLI Reference
 
-The scaffold script supports these flags (used internally by the skill, but can also be run directly):
-
+The scaffold script:
 ```bash
 python scripts/scaffold.py --project-name "my-app" \
   --frontend nextjs --backend integrated --database postgresql \
@@ -174,18 +216,34 @@ python scripts/scaffold.py --project-name "my-app" \
   --dev-cmd "npm run dev" --build-cmd "npm run build" \
   --migrate-cmd "npx prisma migrate dev" \
   --ai --tdd --team --conventional-commits \
-  --context7 --sentry \
+  --context7 --sentry --analyze \
   --verify --create-root
 ```
 
 Key flags:
 - `--preset <name>` — Use a preset stack configuration
+- `--analyze` — Run codebase analyzer to generate project-specific rules
 - `--update` — Merge into existing .claude/ (don't overwrite)
 - `--force` — Overwrite all existing files
 - `--dry-run` — Show what would be created without writing
 - `--verify` — Run verification checks after scaffolding
 - `--upgrade` — Upgrade existing config to current version
 - `--minimal-mcp` — Skip community MCP servers
+
+The analyzer:
+```bash
+python scripts/analyze.py /path/to/project                # Print analysis report
+python scripts/analyze.py /path/to/project --write-rules  # Write rule files
+python scripts/analyze.py /path/to/project --json          # JSON output
+```
+
+The learning system:
+```bash
+python scripts/learn.py /path/to/project --capture "Use AppError for all errors"
+python scripts/learn.py /path/to/project --from-git         # Detect from git history
+python scripts/learn.py /path/to/project --show             # Show learned rules
+python scripts/learn.py /path/to/project --forget "AppError" # Remove a rule
+```
 
 The auditor:
 ```bash
@@ -198,9 +256,9 @@ python scripts/audit.py /path/to/project --json        # JSON output
 ## Development
 
 ```bash
-# Run tests (185 tests, stdlib only)
+# Run all tests (264 tests, stdlib only)
 cd scripts/
-python -m pytest test_scaffold.py test_audit.py -v
+python -m pytest test_scaffold.py test_audit.py test_analyze.py test_learn.py -v
 ```
 
 ## License
