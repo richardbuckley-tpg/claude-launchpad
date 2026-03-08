@@ -20,7 +20,8 @@
     "start a project", "new app", "create a project", "project setup",
     "audit my config", "check my claude setup", "optimize my claude config",
     "analyze my codebase", "learn from my corrections", "build feature",
-    "evolve my config", "update my rules"
+    "evolve my config", "update my rules", "migrate my cursor config",
+    "monorepo setup", "check dependency drift"
   ],
   "domains": [
     "finance", "healthcare", "hr", "e-commerce", "legal", "education"
@@ -45,7 +46,11 @@
     "orchestration",
     "evolve",
     "domain-auditors",
-    "compliance"
+    "compliance",
+    "monorepo",
+    "ai-config-migration",
+    "dependency-drift",
+    "enhanced-auto-detection"
   ],
   "stacks": [
     "nextjs", "react-vite", "vue", "sveltekit",

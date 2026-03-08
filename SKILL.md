@@ -50,9 +50,11 @@ Ask conversationally, 2-3 questions at a time. Don't dump all at once.
 > ```bash
 > python <skill-path>/scripts/analyze.py <project-root>
 > ```
-> This detects frontend, backend, ORM, auth, test framework, AND extracts project-specific
-> patterns (error handling, validation, auth middleware, file organization, key abstractions).
-> Present findings, only ask about gaps the analyzer can't detect (hosting, CI/CD, preferences).
+> This detects frontend, backend, ORM, auth, test framework, commands (test/lint/dev/build/migrate),
+> git platform, CI/CD, hosting, monorepo structure, AND extracts project-specific patterns
+> (error handling, validation, auth middleware, file organization, key abstractions).
+> It also detects and migrates other AI configs (.cursorrules, copilot-instructions.md, .windsurfrules).
+> Present findings, only ask about gaps the analyzer can't detect (preferences, team size).
 
 Capture: `project_name`, `description`, `team`, `architecture`, `is_existing`
 
@@ -150,7 +152,8 @@ python <skill-path>/scripts/scaffold.py \
   [--context7] [--sequential-thinking] [--minimal-mcp] \
   [--lint-cmd "{lint_cmd}"] [--test-cmd "{test_cmd}"] \
   [--dev-cmd "{dev_cmd}"] [--build-cmd "{build_cmd}"] \
-  [--migrate-cmd "{migrate_cmd}"] [--analyze] [--create-root]
+  [--migrate-cmd "{migrate_cmd}"] [--analyze] [--monorepo] \
+  [--migrate-ai-configs] [--create-root]
 ```
 
 This creates: directory structure, .claude/ skeleton, slash commands, skills, agents, rules, hooks,

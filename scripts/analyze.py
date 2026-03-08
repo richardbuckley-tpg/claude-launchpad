@@ -94,6 +94,152 @@ def read_file_safe(fp: Path) -> str:
         return ""
 
 
+# ── Monorepo Detection ──────────────────────────────────────────────────
+
+
+def detect_monorepo(project_dir: Path):
+    """Detect monorepo tooling and enumerate workspace packages.
+
+    Returns None if the project is not a monorepo, or a dict with keys:
+        tool      – "turborepo", "nx", "pnpm-workspaces", "yarn-workspaces", "lerna"
+        packages  – list of {"name": ..., "path": ...} for each workspace package
+    """
+
+    def _expand_workspace_patterns(base: Path, patterns: list) -> list:
+        """Expand glob patterns like 'apps/*' into concrete packages."""
+        packages = []
+        seen = set()
+        for pattern in patterns:
+            pattern = pattern.strip()
+            if not pattern:
+                continue
+            # Remove trailing slash if present
+            pattern = pattern.rstrip("/")
+            for pkg_dir in sorted(base.glob(pattern)):
+                if not pkg_dir.is_dir():
+                    continue
+                pkg_json = pkg_dir / "package.json"
+                rel = str(pkg_dir.relative_to(base))
+                if rel in seen:
+                    continue
+                seen.add(rel)
+                name = pkg_dir.name  # fallback
+                if pkg_json.exists():
+                    try:
+                        data = json.loads(pkg_json.read_text())
+                        name = data.get("name", name)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        pass
+                packages.append({"name": name, "path": rel})
+        return packages
+
+    # 1. Turborepo
+    turbo_json = project_dir / "turbo.json"
+    if turbo_json.exists():
+        tool = "turborepo"
+        # Turborepo uses workspace patterns from package.json or pnpm-workspace.yaml
+        patterns = []
+        # Try pnpm-workspace.yaml first
+        pnpm_ws = project_dir / "pnpm-workspace.yaml"
+        if pnpm_ws.exists():
+            try:
+                content = pnpm_ws.read_text()
+                for line in content.splitlines():
+                    line = line.strip()
+                    if line.startswith("- "):
+                        pat = line[2:].strip().strip("'\"")
+                        if pat:
+                            patterns.append(pat)
+            except UnicodeDecodeError:
+                pass
+        # Fallback to package.json workspaces
+        if not patterns:
+            pkg_json = project_dir / "package.json"
+            if pkg_json.exists():
+                try:
+                    data = json.loads(pkg_json.read_text())
+                    ws = data.get("workspaces", [])
+                    if isinstance(ws, dict):
+                        ws = ws.get("packages", [])
+                    patterns = ws if isinstance(ws, list) else []
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    pass
+        packages = _expand_workspace_patterns(project_dir, patterns)
+        return {"tool": tool, "packages": packages}
+
+    # 2. Nx
+    if (project_dir / "nx.json").exists():
+        tool = "nx"
+        # Nx commonly uses apps/* and packages/* (or libs/*)
+        patterns = []
+        pkg_json = project_dir / "package.json"
+        if pkg_json.exists():
+            try:
+                data = json.loads(pkg_json.read_text())
+                ws = data.get("workspaces", [])
+                if isinstance(ws, dict):
+                    ws = ws.get("packages", [])
+                patterns = ws if isinstance(ws, list) else []
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                pass
+        if not patterns:
+            # Nx default conventions
+            patterns = ["apps/*", "packages/*", "libs/*"]
+        packages = _expand_workspace_patterns(project_dir, patterns)
+        return {"tool": tool, "packages": packages}
+
+    # 3. pnpm workspaces (without turbo)
+    pnpm_ws = project_dir / "pnpm-workspace.yaml"
+    if pnpm_ws.exists():
+        tool = "pnpm-workspaces"
+        patterns = []
+        try:
+            content = pnpm_ws.read_text()
+            for line in content.splitlines():
+                line = line.strip()
+                if line.startswith("- "):
+                    pat = line[2:].strip().strip("'\"")
+                    if pat:
+                        patterns.append(pat)
+        except UnicodeDecodeError:
+            pass
+        packages = _expand_workspace_patterns(project_dir, patterns)
+        return {"tool": tool, "packages": packages}
+
+    # 4. yarn/npm workspaces
+    pkg_json = project_dir / "package.json"
+    if pkg_json.exists():
+        try:
+            data = json.loads(pkg_json.read_text())
+            ws = data.get("workspaces")
+            if ws is not None:
+                if isinstance(ws, dict):
+                    ws = ws.get("packages", [])
+                if isinstance(ws, list) and ws:
+                    tool = "yarn-workspaces"
+                    packages = _expand_workspace_patterns(project_dir, ws)
+                    return {"tool": tool, "packages": packages}
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass
+
+    # 5. Lerna
+    if (project_dir / "lerna.json").exists():
+        tool = "lerna"
+        patterns = ["packages/*"]
+        lerna_json = project_dir / "lerna.json"
+        try:
+            data = json.loads(lerna_json.read_text())
+            lerna_patterns = data.get("packages")
+            if isinstance(lerna_patterns, list) and lerna_patterns:
+                patterns = lerna_patterns
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass
+        packages = _expand_workspace_patterns(project_dir, patterns)
+        return {"tool": tool, "packages": packages}
+
+    return None
+
+
 # ── Stack Detection ──────────────────────────────────────────────────────
 
 def detect_stack(project_dir: Path) -> dict:
@@ -173,6 +319,20 @@ def detect_stack(project_dir: Path) -> dict:
             elif "@playwright/test" in deps:
                 stack["test_framework"] = "playwright"
 
+            # Command detection from package.json scripts
+            scripts = pkg.get("scripts", {})
+            pm = stack.get("package_manager", "npm")
+            pm_run = f"{pm} run" if pm == "npm" else pm
+            cmd_map = {
+                "test": "test_cmd",
+                "lint": "lint_cmd",
+                "dev": "dev_cmd",
+                "build": "build_cmd",
+            }
+            for script_name, stack_key in cmd_map.items():
+                if script_name in scripts and stack_key not in stack:
+                    stack[stack_key] = f"{pm_run} {script_name}"
+
         except (json.JSONDecodeError, UnicodeDecodeError):
             pass
 
@@ -199,6 +359,23 @@ def detect_stack(project_dir: Path) -> dict:
                 stack["database"] = "postgresql"
             if "pytest" in content:
                 stack["test_framework"] = "pytest"
+
+            # Command detection from pyproject.toml
+            if pyproject.exists():
+                pyproject_content = pyproject.read_text()
+                if ("[tool.pytest]" in pyproject_content
+                        or "[tool.pytest.ini_options]" in pyproject_content):
+                    if "test_cmd" not in stack:
+                        stack["test_cmd"] = "pytest"
+                if "[tool.ruff]" in pyproject_content:
+                    if "lint_cmd" not in stack:
+                        stack["lint_cmd"] = "ruff check ."
+                if "[tool.mypy]" in pyproject_content:
+                    if "lint_cmd" not in stack:
+                        stack["lint_cmd"] = "mypy"
+                    elif "mypy" not in stack["lint_cmd"]:
+                        stack["lint_cmd"] += " && mypy"
+
         except UnicodeDecodeError:
             pass
 
@@ -244,7 +421,284 @@ def detect_stack(project_dir: Path) -> dict:
             except UnicodeDecodeError:
                 pass
 
+    # Makefile command detection
+    makefile = project_dir / "Makefile"
+    if makefile.exists():
+        try:
+            makefile_content = makefile.read_text()
+            makefile_targets = re.findall(r'^(\w+)\s*:', makefile_content, re.MULTILINE)
+            make_cmd_map = {
+                "test": "test_cmd",
+                "lint": "lint_cmd",
+                "dev": "dev_cmd",
+                "build": "build_cmd",
+            }
+            for target, stack_key in make_cmd_map.items():
+                if target in makefile_targets and stack_key not in stack:
+                    stack[stack_key] = f"make {target}"
+        except UnicodeDecodeError:
+            pass
+
+    # Migration command detection (based on ORM already detected)
+    if "migrate_cmd" not in stack:
+        orm = stack.get("orm", "")
+        if orm == "prisma":
+            stack["migrate_cmd"] = "npx prisma migrate dev"
+        elif orm == "drizzle":
+            stack["migrate_cmd"] = "npx drizzle-kit push"
+        elif orm == "sqlalchemy":
+            stack["migrate_cmd"] = "alembic upgrade head"
+        elif orm == "activerecord":
+            stack["migrate_cmd"] = "rails db:migrate"
+
+    # Git platform detection
+    git_config = project_dir / ".git" / "config"
+    if git_config.exists():
+        try:
+            git_content = git_config.read_text()
+            if "github.com" in git_content:
+                stack["git_platform"] = "github"
+            elif "gitlab.com" in git_content:
+                stack["git_platform"] = "gitlab"
+            elif "bitbucket.org" in git_content:
+                stack["git_platform"] = "bitbucket"
+        except UnicodeDecodeError:
+            pass
+
+    # CI/CD detection
+    if (project_dir / ".github" / "workflows").is_dir():
+        stack["ci_cd"] = "github-actions"
+    elif (project_dir / ".gitlab-ci.yml").exists():
+        stack["ci_cd"] = "gitlab-ci"
+
+    # Hosting detection
+    if (project_dir / "vercel.json").exists() or (project_dir / ".vercel").is_dir():
+        stack["hosting"] = "vercel"
+    elif (project_dir / "fly.toml").exists():
+        stack["hosting"] = "fly"
+    elif (project_dir / "railway.toml").exists() or (project_dir / "railway.json").exists():
+        stack["hosting"] = "railway"
+    elif (project_dir / "serverless.yml").exists() or (project_dir / "sam-template.yml").exists():
+        stack["hosting"] = "aws"
+    elif (project_dir / "Dockerfile").exists() and "hosting" not in stack:
+        stack["hosting"] = "self-hosted"
+
+    # Monorepo detection
+    monorepo = detect_monorepo(project_dir)
+    if monorepo:
+        stack["monorepo"] = monorepo
+
     return stack
+
+
+def snapshot_dependencies(project_dir: Path) -> dict:
+    """Read current dependencies from manifest files and return a snapshot.
+
+    Returns a dict keyed by ecosystem (node, python, go, ruby) with
+    package-name -> version mappings.  Only ecosystems that have packages
+    are included.  Version is "*" when not easily parseable.
+    """
+    snapshot = {}
+
+    # ── Node (package.json) ──────────────────────────────────────────
+    pkg_json = project_dir / "package.json"
+    if pkg_json.exists():
+        try:
+            pkg = json.loads(pkg_json.read_text())
+            merged = {}
+            merged.update(pkg.get("dependencies", {}))
+            merged.update(pkg.get("devDependencies", {}))
+            if merged:
+                snapshot["node"] = {k: str(v) for k, v in merged.items()}
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass
+
+    # ── Python (requirements.txt / pyproject.toml) ───────────────────
+    py_deps = {}
+    requirements = project_dir / "requirements.txt"
+    if requirements.exists():
+        try:
+            for line in requirements.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or line.startswith("-"):
+                    continue
+                # Handle package==version, package>=version, package~=version, bare package
+                match = re.match(r'^([A-Za-z0-9_][A-Za-z0-9._-]*)\s*(?:[=~!<>]=?\s*(.+))?', line)
+                if match:
+                    name = match.group(1).lower()
+                    version = match.group(2).strip() if match.group(2) else "*"
+                    py_deps[name] = version
+        except UnicodeDecodeError:
+            pass
+
+    pyproject = project_dir / "pyproject.toml"
+    if pyproject.exists():
+        try:
+            content = pyproject.read_text()
+            # Look for [project] dependencies = [...] section
+            in_deps = False
+            for line in content.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("dependencies") and "=" in stripped:
+                    in_deps = True
+                    # Handle inline list on same line
+                    bracket_content = stripped.split("=", 1)[1].strip()
+                    if bracket_content.startswith("["):
+                        items = re.findall(r'"([^"]+)"', bracket_content)
+                        for item in items:
+                            dep_match = re.match(r'^([A-Za-z0-9_][A-Za-z0-9._-]*)', item)
+                            if dep_match:
+                                py_deps[dep_match.group(1).lower()] = "*"
+                        if "]" in bracket_content:
+                            in_deps = False
+                    continue
+                if in_deps:
+                    if "]" in stripped:
+                        items = re.findall(r'"([^"]+)"', stripped)
+                        for item in items:
+                            dep_match = re.match(r'^([A-Za-z0-9_][A-Za-z0-9._-]*)', item)
+                            if dep_match:
+                                py_deps[dep_match.group(1).lower()] = "*"
+                        in_deps = False
+                        continue
+                    items = re.findall(r'"([^"]+)"', stripped)
+                    for item in items:
+                        dep_match = re.match(r'^([A-Za-z0-9_][A-Za-z0-9._-]*)', item)
+                        if dep_match:
+                            py_deps[dep_match.group(1).lower()] = "*"
+                    # Stop if we hit a new section
+                    if stripped.startswith("["):
+                        in_deps = False
+        except UnicodeDecodeError:
+            pass
+
+    if py_deps:
+        snapshot["python"] = py_deps
+
+    # ── Go (go.mod) ──────────────────────────────────────────────────
+    go_mod = project_dir / "go.mod"
+    if go_mod.exists():
+        try:
+            content = go_mod.read_text()
+            go_deps = {}
+            in_require = False
+            for line in content.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("require ("):
+                    in_require = True
+                    continue
+                if in_require:
+                    if stripped == ")":
+                        in_require = False
+                        continue
+                    parts = stripped.split()
+                    if len(parts) >= 2:
+                        go_deps[parts[0]] = parts[1]
+                # Single-line require
+                elif stripped.startswith("require "):
+                    parts = stripped.split()
+                    if len(parts) >= 3:
+                        go_deps[parts[1]] = parts[2]
+            if go_deps:
+                snapshot["go"] = go_deps
+        except UnicodeDecodeError:
+            pass
+
+    # ── Ruby (Gemfile) ───────────────────────────────────────────────
+    gemfile = project_dir / "Gemfile"
+    if gemfile.exists():
+        try:
+            content = gemfile.read_text()
+            ruby_deps = {}
+            for line in content.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    continue
+                gem_match = re.match(r'''gem\s+['"]([^'"]+)['"](?:\s*,\s*['"]([^'"]+)['"])?''', stripped)
+                if gem_match:
+                    name = gem_match.group(1)
+                    version = gem_match.group(2) if gem_match.group(2) else "*"
+                    ruby_deps[name] = version
+            if ruby_deps:
+                snapshot["ruby"] = ruby_deps
+        except UnicodeDecodeError:
+            pass
+
+    return snapshot
+
+
+# ── AI Config Migration ─────────────────────────────────────────────────
+
+AI_CONFIG_FILES = [
+    {"source": "cursor", "path": ".cursorrules"},
+    {"source": "copilot", "path": ".github/copilot-instructions.md"},
+    {"source": "windsurf", "path": ".windsurfrules"},
+    {"source": "aider", "path": ".aider.conf.yml"},
+]
+
+
+def detect_ai_configs(project_dir: Path) -> list:
+    """Detect other AI tool configuration files in the project."""
+    found = []
+    for cfg in AI_CONFIG_FILES:
+        filepath = project_dir / cfg["path"]
+        if filepath.exists() and filepath.is_file():
+            try:
+                content = filepath.read_text(encoding="utf-8")
+                found.append({
+                    "source": cfg["source"],
+                    "path": cfg["path"],
+                    "content": content,
+                })
+            except (UnicodeDecodeError, PermissionError, OSError):
+                pass
+    return found
+
+
+def migrate_ai_configs(project_dir: Path, configs: list) -> list:
+    """Convert detected AI configs to .claude/rules/migrated-{source}.md files.
+
+    Returns list of created file paths. Skips files that already exist.
+    """
+    rules_dir = project_dir / ".claude" / "rules"
+    rules_dir.mkdir(parents=True, exist_ok=True)
+
+    created = []
+    for cfg in configs:
+        source = cfg["source"]
+        content = cfg["content"]
+        dest = rules_dir / f"migrated-{source}.md"
+
+        # Don't overwrite existing migrated files
+        if dest.exists():
+            continue
+
+        source_title = source.capitalize()
+
+        # Build the migrated file content
+        lines = []
+        lines.append("---")
+        lines.append(f"description: Rules migrated from {source}")
+        lines.append("---")
+        lines.append("")
+        lines.append(f"# Migrated from {source_title}")
+        lines.append("")
+        lines.append("> Auto-migrated by Claude Launchpad. Review and adjust.")
+        lines.append("")
+
+        if source == "cursor":
+            lines.append("> Note: These were Cursor-specific rules and may need adaptation for Claude.")
+            lines.append("")
+        elif source == "aider":
+            lines.append("> Note: These were Aider-specific settings and may need adaptation for Claude.")
+            lines.append("")
+
+        lines.append(content)
+
+        dest.write_text("\n".join(lines), encoding="utf-8")
+        created.append(str(dest.relative_to(project_dir)))
+
+    return created
 
 
 # ── Pattern Detectors ────────────────────────────────────────────────────
@@ -1135,6 +1589,8 @@ def main():
                    help="Enhance analysis with learned corrections from /learn")
     p.add_argument("--check-stale", action="store_true", dest="check_stale",
                    help="Check for stale project-*.md rules")
+    p.add_argument("--migrate-ai-configs", action="store_true", dest="migrate_ai_configs",
+                   help="Detect and migrate other AI tool configs (.cursorrules, copilot, etc.)")
     args = p.parse_args()
 
     project_dir = Path(args.project_dir).resolve()
@@ -1153,6 +1609,21 @@ def main():
                 print(f"    → {s['suggestion']}")
         else:
             print("No stale references found in analyzer rules.")
+        sys.exit(0)
+
+    if args.migrate_ai_configs:
+        configs = detect_ai_configs(project_dir)
+        if configs:
+            print(f"Found {len(configs)} AI config(s):")
+            for c in configs:
+                print(f"  {c['source']}: {c['path']}")
+            migrated = migrate_ai_configs(project_dir, configs)
+            for m in migrated:
+                print(f"  Created {m}")
+            if not migrated:
+                print("  All configs already migrated (files exist)")
+        else:
+            print("No AI tool configs found")
         sys.exit(0)
 
     result = analyze(project_dir)

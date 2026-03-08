@@ -451,6 +451,103 @@ def check_stale_analyzer_rules(project_dir: Path, result: AuditResult):
             pass
 
 
+# Packages whose addition/removal likely requires config changes
+SIGNIFICANT_PACKAGES = {
+    "test": ["jest", "vitest", "pytest", "mocha", "@playwright/test", "cypress"],
+    "orm": ["prisma", "@prisma/client", "drizzle-orm", "typeorm", "sequelize", "mongoose", "sqlalchemy"],
+    "auth": ["@clerk/nextjs", "@clerk/express", "next-auth", "@auth/core", "@supabase/supabase-js"],
+    "framework": ["next", "express", "fastify", "react", "vue", "svelte", "@sveltejs/kit", "fastapi", "django", "flask"],
+}
+
+# Friendly labels for drift warnings
+_DRIFT_LABELS = {
+    "test": "New test framework detected",
+    "orm": "New ORM added",
+    "auth": "New auth provider",
+    "framework": "Major framework change",
+}
+
+
+def _classify_package(pkg_name: str) -> str | None:
+    """Return the significance category for a package, or None."""
+    pkg_lower = pkg_name.lower()
+    for category, names in SIGNIFICANT_PACKAGES.items():
+        if pkg_lower in (n.lower() for n in names):
+            return category
+    return None
+
+
+def check_dependency_drift(project_dir: Path, result: AuditResult):
+    """Detect significant dependency changes since the last snapshot.
+
+    Reads the saved dependency_snapshot from launchpad-config.json, compares
+    it against current manifest files, and flags meaningful additions or
+    removals that likely need config updates.
+    """
+    config_path = project_dir / ".claude" / "launchpad-config.json"
+    if not config_path.exists():
+        return
+
+    try:
+        config = json.loads(config_path.read_text())
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return
+
+    saved_snapshot = config.get("dependency_snapshot")
+    if not saved_snapshot:
+        return  # No baseline to compare against
+
+    # Import snapshot_dependencies from analyze.py (sibling script)
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from analyze import snapshot_dependencies
+    except ImportError:
+        return
+
+    current_snapshot = snapshot_dependencies(project_dir)
+    if not current_snapshot:
+        return
+
+    # Gather all saved and current package names across ecosystems
+    saved_all = set()
+    for ecosystem_deps in saved_snapshot.values():
+        if isinstance(ecosystem_deps, dict):
+            saved_all.update(ecosystem_deps.keys())
+
+    current_all = set()
+    for ecosystem_deps in current_snapshot.values():
+        if isinstance(ecosystem_deps, dict):
+            current_all.update(ecosystem_deps.keys())
+
+    added = current_all - saved_all
+    removed = saved_all - current_all
+
+    # Flag significant additions (2 points each instead of default 3)
+    for pkg in sorted(added):
+        category = _classify_package(pkg)
+        if category:
+            label = _DRIFT_LABELS.get(category, "Dependency change")
+            result.issues.append({
+                "level": "warning",
+                "message": f"{label}: '{pkg}' added since last scaffold",
+                "fix": "Run /evolve to update config",
+                "category": "freshness",
+            })
+            result._deduct("freshness", 2)
+
+    # Flag significant removals that may leave stale config references
+    for pkg in sorted(removed):
+        category = _classify_package(pkg)
+        if category:
+            result.issues.append({
+                "level": "warning",
+                "message": f"Package '{pkg}' ({category}) removed but may still be referenced in config",
+                "fix": "Run /evolve to clean up stale references",
+                "category": "freshness",
+            })
+            result._deduct("freshness", 2)
+
+
 def check_handoff(project_dir: Path, result: AuditResult):
     """Check handoff document exists."""
     handoff = project_dir / ".claude" / "handoff.md"
@@ -487,6 +584,7 @@ def audit(project_dir: Path) -> AuditResult:
     check_settings(project_dir, result)
     check_staleness(project_dir, result)
     check_stale_analyzer_rules(project_dir, result)
+    check_dependency_drift(project_dir, result)
     check_mcp_servers(project_dir, result)
     check_skills_content(project_dir, result)
     check_commands_content(project_dir, result)

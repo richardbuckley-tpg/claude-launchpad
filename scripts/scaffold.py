@@ -1526,6 +1526,19 @@ description: SQLAlchemy / Alembic conventions
 - Separate models from schemas. Use relationship() for joins.
 """))
 
+    # Monorepo rule
+    if getattr(args, 'monorepo', False) or getattr(args, '_monorepo_info', None):
+        rules.append(("monorepo", """---
+globs: ["**/package.json", "turbo.json", "nx.json"]
+description: Monorepo conventions
+---
+
+- Changes in shared packages (packages/*) affect all consumers — run full test suite
+- Each package has its own tsconfig/eslint — respect package-level config
+- Import from packages using workspace protocol, never relative paths across packages
+- Run commands from repo root using workspace tool (turbo/nx/pnpm)
+"""))
+
     return rules
 
 
@@ -2269,6 +2282,23 @@ def scaffold(args):
         "version": VERSION,
         "last_analysis": datetime.now().isoformat() if getattr(args, 'analyze', False) else None,
     }
+
+    # Save dependency snapshot for drift detection (Feature 5)
+    # Use cached snapshot from analyze phase if available, otherwise scan fresh
+    if getattr(args, '_dep_snapshot', None):
+        metadata["dependency_snapshot"] = args._dep_snapshot
+    elif getattr(args, 'analyze', False):
+        try:
+            from analyze import snapshot_dependencies
+            output_dir_path = Path(args.output_dir).resolve()
+            project_dir_for_deps = output_dir_path / args.project_name if args.create_root else output_dir_path
+            if project_dir_for_deps.exists():
+                dep_snapshot = snapshot_dependencies(project_dir_for_deps)
+                if dep_snapshot:
+                    metadata["dependency_snapshot"] = dep_snapshot
+        except ImportError:
+            pass
+
     config_path = project_dir / ".claude" / "launchpad-config.json"
     if not dry_run:
         if update and config_path.exists():
@@ -2407,6 +2437,8 @@ def main():
     p.add_argument("--preset", choices=list(PRESETS.keys()), default=None, help="Use a preset stack configuration")
     p.add_argument("--upgrade", action="store_true", help="Upgrade existing Launchpad config to current version")
     p.add_argument("--analyze", action="store_true", help="Analyze existing codebase to generate project-specific rules")
+    p.add_argument("--monorepo", action="store_true", help="Enable monorepo conventions rule")
+    p.add_argument("--migrate-ai-configs", action="store_true", dest="migrate_ai_configs", help="Detect and migrate other AI tool configs (.cursorrules, copilot, etc.)")
     p.add_argument("--output-dir", default=".")
     p.add_argument("--create-root", action="store_true")
     args = p.parse_args()
@@ -2430,6 +2462,22 @@ def main():
             elif current is None or current == "none":
                 setattr(args, key, value)
 
+    # AI config migration — detect and migrate .cursorrules, copilot, etc.
+    if getattr(args, 'migrate_ai_configs', False) or getattr(args, 'analyze', False):
+        try:
+            from analyze import detect_ai_configs, migrate_ai_configs
+            output_dir = Path(args.output_dir).resolve()
+            project_dir = output_dir / args.project_name if args.create_root else output_dir
+            if project_dir.exists():
+                ai_configs = detect_ai_configs(project_dir)
+                if ai_configs:
+                    print(f"Found {len(ai_configs)} AI tool config(s): {', '.join(c['source'] for c in ai_configs)}")
+                    migrated = migrate_ai_configs(project_dir, ai_configs)
+                    if migrated:
+                        print(f"  Migrated {len(migrated)} config(s) to .claude/rules/")
+        except ImportError:
+            pass
+
     # Codebase analysis — detect stack and generate project-specific rules
     if getattr(args, 'analyze', False):
         try:
@@ -2443,16 +2491,36 @@ def main():
                 stack_to_args = {
                     "frontend": "frontend", "backend": "backend",
                     "database": "database", "orm": "orm", "auth": "auth",
+                    "git_platform": "git_platform", "ci_cd": "ci_cd",
+                    "hosting": "hosting", "test_cmd": "test_cmd",
+                    "lint_cmd": "lint_cmd", "dev_cmd": "dev_cmd",
+                    "build_cmd": "build_cmd", "migrate_cmd": "migrate_cmd",
                 }
                 for stack_key, arg_key in stack_to_args.items():
                     detected = analysis.stack.get(stack_key)
                     if detected and getattr(args, arg_key, None) in (None, "none"):
                         setattr(args, arg_key, detected)
                         print(f"  Detected {arg_key}: {detected}")
+                # Enable monorepo flag if analysis detected a monorepo
+                monorepo_info = analysis.stack.get("monorepo")
+                if monorepo_info:
+                    args.monorepo = True
+                    args._monorepo_info = monorepo_info
+                    pkg_count = len(monorepo_info.get("packages", []))
+                    print(f"  Detected monorepo: {monorepo_info['tool']} ({pkg_count} packages)")
                 # Write analyzer rules
                 created = write_analysis_rules(project_dir, analysis, force=args.force)
                 if created:
                     print(f"  Generated {len(created)} project-specific rules from codebase analysis")
+                # Capture dependency snapshot for drift detection
+                try:
+                    from analyze import snapshot_dependencies
+                    dep_snapshot = snapshot_dependencies(project_dir)
+                    if dep_snapshot:
+                        args._dep_snapshot = dep_snapshot
+                        print(f"  Captured dependency snapshot ({sum(len(v) for v in dep_snapshot.values())} packages)")
+                except ImportError:
+                    pass
                 print()
             else:
                 print(f"  Skipping analysis — {project_dir} doesn't exist yet")

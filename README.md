@@ -199,6 +199,22 @@ For regulated domains, Launchpad generates specialized auditor agents paired wit
 
 Compliance frameworks (GDPR, SOX, HIPAA, PCI-DSS) can be combined — a UK fintech gets GDPR + SOX + PCI-DSS rules. The `/build` pipeline includes a domain audit step before code review. Extend any rule set with `/learn`.
 
+### Enhanced Auto-Detection
+
+For existing projects, the analyzer detects far more than just your stack. It finds your actual commands (test, lint, dev, build, migrate) from `package.json` scripts, `Makefile` targets, and `pyproject.toml`. It detects your git platform from `.git/config`, CI/CD from workflow files, and hosting from `vercel.json`/`fly.toml`/`railway.toml`. This means fewer interview questions — the analyzer fills in what it can find.
+
+### Monorepo Support
+
+Detects Turborepo, Nx, pnpm workspaces, yarn workspaces, and Lerna. Identifies all packages with their paths and generates a monorepo-specific rule covering workspace conventions, cross-package imports, and shared config respect.
+
+### AI Config Migration
+
+Migrates existing AI tool configs (`.cursorrules`, `.github/copilot-instructions.md`, `.windsurfrules`) to `.claude/rules/migrated-*.md`. Runs automatically with `--analyze` or explicitly with `--migrate-ai-configs`. Preserves original content with adaptation notes.
+
+### Dependency Drift Detection
+
+During `--analyze`, snapshots your project's dependencies. On subsequent audits, compares current deps against the snapshot and flags significant changes — new test frameworks, ORMs, auth providers, or major framework changes that may need config updates. Suggests `/evolve` when drift is detected.
+
 ### Token-Optimized
 
 Strict line limits keep your config lean: CLAUDE.md ≤100 lines, agents ≤30 lines, rules ≤20 lines. After scaffolding, Launchpad shows the estimated token impact on your context window.
@@ -256,6 +272,8 @@ python scripts/scaffold.py --project-name "my-app" \
 Key flags:
 - `--preset <name>` — Use a preset stack configuration
 - `--analyze` — Run codebase analyzer to generate project-specific rules
+- `--migrate-ai-configs` — Migrate .cursorrules, copilot-instructions.md, .windsurfrules to .claude/rules/
+- `--monorepo` — Enable monorepo support (auto-detected with --analyze)
 - `--update` — Merge into existing .claude/ (don't overwrite)
 - `--force` — Overwrite all existing files
 - `--dry-run` — Show what would be created without writing
@@ -270,6 +288,7 @@ python scripts/analyze.py /path/to/project --write-rules            # Write rule
 python scripts/analyze.py /path/to/project --incorporate-learned     # Merge learned corrections
 python scripts/analyze.py /path/to/project --check-stale            # Find stale rule references
 python scripts/analyze.py /path/to/project --json                   # JSON output
+python scripts/analyze.py /path/to/project --migrate-ai-configs     # Migrate other AI tool configs
 ```
 
 The learning system:
@@ -291,7 +310,7 @@ python scripts/audit.py /path/to/project --json        # JSON output
 ## Development
 
 ```bash
-# Run all tests (320 tests, stdlib only)
+# Run all tests (375 tests, stdlib only)
 cd scripts/
 python -m pytest test_scaffold.py test_audit.py test_analyze.py test_learn.py -v
 ```

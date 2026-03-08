@@ -37,6 +37,10 @@ No external dependencies — stdlib only (Python 3.10+).
 - Learned rules from `/learn` stored in `.claude/rules/learned.md` and `.claude/learn-log.json`
 - Feedback loop: `/evolve` re-analyzes with learned corrections merged, updates rules, audits result
 - `last_analysis` timestamp in `launchpad-config.json` tracks when codebase was last analyzed
+- Enhanced auto-detection: commands (test/lint/dev/build/migrate), git platform, CI/CD, hosting from project files
+- Monorepo support: Turborepo, Nx, pnpm/yarn workspaces, Lerna detection with per-package rules
+- AI config migration: `.cursorrules`, copilot-instructions.md, `.windsurfrules` → `.claude/rules/migrated-*.md`
+- Dependency drift: snapshots deps during `--analyze`, auditor flags significant package changes
 - Token budget summary shows context window % after scaffolding
 
 ## File Layout
@@ -46,7 +50,7 @@ scripts/scaffold.py    — Scaffolder (generates .claude/ tree)
 scripts/analyze.py     — Codebase analyzer (extracts patterns → rules)
 scripts/learn.py       — Learning system (captures corrections)
 scripts/audit.py       — Auditor (scores config health)
-scripts/test_*.py      — Test suites (320 tests)
+scripts/test_*.py      — Test suites (375 tests)
 reference/stacks.md    — Stack patterns (Next.js, FastAPI, Go, Rails, Rust, etc.)
 reference/agents.md    — Agent templates and selection logic
 reference/audit-rules.md — Scoring rubric documentation
@@ -59,4 +63,4 @@ Tests use `unittest` with `tempfile` for isolation. Run with:
 python -m pytest scripts/ -v
 ```
 
-Key test areas: stack detection, pattern detection (error handling, auth, validation, data fetching, testing, API, database), file organization, key abstractions, rule generation, capture/forget/git-analysis, feedback loop (incorporate learned, stale rules, reanalysis suggestion, analysis timestamps), command injection blocking, hook scoping, settings merge, dry-run mode, staleness detection, secret detection, agent/rule generation, community MCP, discoverability checks, context percentage.
+Key test areas: stack detection, pattern detection (error handling, auth, validation, data fetching, testing, API, database), file organization, key abstractions, rule generation, capture/forget/git-analysis, feedback loop (incorporate learned, stale rules, reanalysis suggestion, analysis timestamps), command injection blocking, hook scoping, settings merge, dry-run mode, staleness detection, secret detection, agent/rule generation, community MCP, discoverability checks, context percentage, enhanced auto-detection (commands/git/CI/hosting), monorepo detection, AI config migration, dependency drift.

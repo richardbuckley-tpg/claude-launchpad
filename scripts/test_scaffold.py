@@ -79,6 +79,10 @@ def make_args(**overrides):
         "update": False,
         "output_dir": ".",
         "create_root": False,
+        "monorepo": False,
+        "migrate_ai_configs": False,
+        "_monorepo_info": None,
+        "_dep_snapshot": None,
     }
     defaults.update(overrides)
     return Namespace(**defaults)
@@ -1494,6 +1498,75 @@ class TestDomainScaffoldIntegration(unittest.TestCase):
         self.assertFalse((agents_dir / "compliance-auditor.md").exists())
         self.assertFalse((agents_dir / "frontend-auditor.md").exists())
         self.assertFalse((agents_dir / "architecture-auditor.md").exists())
+
+
+class TestEnhancedAutoDetection(unittest.TestCase):
+    """Test enhanced auto-detection features: stack_to_args mapping, monorepo rule, defaults."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_stack_to_args_includes_new_keys(self):
+        """Verify the extended stack_to_args mapping works with hosting, ci_cd, etc."""
+        args = make_args(
+            output_dir=str(self.tmpdir), create_root=True,
+            hosting="vercel", ci_cd="github-actions", git_platform="github",
+            test_cmd="npm run test", lint_cmd="npm run lint",
+            dev_cmd="npm run dev", build_cmd="npm run build",
+            migrate_cmd="npx prisma migrate dev",
+        )
+        scaffold(args)
+        config_path = self.tmpdir / "test-app" / ".claude" / "launchpad-config.json"
+        data = json.loads(config_path.read_text())
+        self.assertEqual(data["hosting"], "vercel")
+        self.assertEqual(data["ci_cd"], "github-actions")
+        self.assertEqual(data["git_platform"], "github")
+        self.assertEqual(data["test_cmd"], "npm run test")
+        self.assertEqual(data["lint_cmd"], "npm run lint")
+        self.assertEqual(data["dev_cmd"], "npm run dev")
+        self.assertEqual(data["build_cmd"], "npm run build")
+        self.assertEqual(data["migrate_cmd"], "npx prisma migrate dev")
+
+    def test_monorepo_rule_generated(self):
+        """When monorepo=True, a monorepo rule should be generated."""
+        args = make_args(
+            output_dir=str(self.tmpdir), create_root=True,
+            monorepo=True,
+        )
+        scaffold(args)
+        rules_dir = self.tmpdir / "test-app" / ".claude" / "rules"
+        monorepo_rule = rules_dir / "monorepo.md"
+        self.assertTrue(monorepo_rule.exists(), "monorepo.md rule should be generated")
+        content = monorepo_rule.read_text()
+        self.assertIn("Monorepo conventions", content)
+        self.assertIn("workspace", content.lower())
+
+    def test_monorepo_flag_default(self):
+        """make_args has monorepo=False by default."""
+        args = make_args()
+        self.assertFalse(args.monorepo)
+        self.assertFalse(args.migrate_ai_configs)
+        self.assertIsNone(args._monorepo_info)
+        self.assertIsNone(args._dep_snapshot)
+
+    def test_dep_snapshot_saved_in_config(self):
+        """When _dep_snapshot is set, it should be saved in launchpad-config.json."""
+        dep_snapshot = {
+            "node": {"react": "18.0.0", "next": "14.0.0"},
+        }
+        args = make_args(
+            output_dir=str(self.tmpdir), create_root=True,
+            _dep_snapshot=dep_snapshot,
+            analyze=True,  # needed for the snapshot save path
+        )
+        scaffold(args)
+        config_path = self.tmpdir / "test-app" / ".claude" / "launchpad-config.json"
+        data = json.loads(config_path.read_text())
+        self.assertIn("dependency_snapshot", data)
+        self.assertEqual(data["dependency_snapshot"]["node"]["react"], "18.0.0")
 
 
 if __name__ == "__main__":

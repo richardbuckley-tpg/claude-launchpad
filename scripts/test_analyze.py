@@ -13,6 +13,7 @@ from analyze import (
     analyze,
     check_stale_rules,
     collect_source_files,
+    detect_ai_configs,
     detect_api_patterns,
     detect_auth_patterns,
     detect_database_patterns,
@@ -20,6 +21,7 @@ from analyze import (
     detect_error_handling,
     detect_file_organization,
     detect_key_abstractions,
+    detect_monorepo,
     detect_stack,
     detect_testing_patterns,
     detect_validation,
@@ -28,7 +30,9 @@ from analyze import (
     get_last_analysis_time,
     incorporate_learned,
     match_correction_to_category,
+    migrate_ai_configs,
     set_last_analysis_time,
+    snapshot_dependencies,
     write_rules,
 )
 
@@ -894,6 +898,397 @@ class TestAnalysisTimestamp(unittest.TestCase):
         write_rules(self.tmpdir, result, force=True)
         ts = get_last_analysis_time(self.tmpdir)
         self.assertIsNotNone(ts)
+
+
+class TestDetectCommands(unittest.TestCase):
+    """Test command detection from package.json scripts, pyproject.toml, and Makefiles."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_detect_npm_scripts(self):
+        (self.tmpdir / "package.json").write_text(json.dumps({
+            "dependencies": {},
+            "devDependencies": {},
+            "scripts": {"test": "jest", "lint": "eslint .", "dev": "next dev", "build": "next build"}
+        }))
+        stack = detect_stack(self.tmpdir)
+        self.assertEqual(stack["test_cmd"], "npm run test")
+        self.assertEqual(stack["lint_cmd"], "npm run lint")
+        self.assertEqual(stack["dev_cmd"], "npm run dev")
+        self.assertEqual(stack["build_cmd"], "npm run build")
+
+    def test_detect_yarn_scripts(self):
+        (self.tmpdir / "package.json").write_text(json.dumps({
+            "dependencies": {},
+            "devDependencies": {},
+            "scripts": {"test": "jest", "lint": "eslint ."}
+        }))
+        (self.tmpdir / "yarn.lock").write_text("")
+        stack = detect_stack(self.tmpdir)
+        self.assertEqual(stack["test_cmd"], "yarn test")
+        self.assertEqual(stack["lint_cmd"], "yarn lint")
+
+    def test_detect_pnpm_scripts(self):
+        (self.tmpdir / "package.json").write_text(json.dumps({
+            "dependencies": {},
+            "devDependencies": {},
+            "scripts": {"test": "vitest", "lint": "eslint ."}
+        }))
+        (self.tmpdir / "pnpm-lock.yaml").write_text("")
+        stack = detect_stack(self.tmpdir)
+        self.assertEqual(stack["test_cmd"], "pnpm test")
+        self.assertEqual(stack["lint_cmd"], "pnpm lint")
+
+    def test_detect_pyproject_pytest(self):
+        (self.tmpdir / "pyproject.toml").write_text(
+            "[tool.pytest.ini_options]\naddopts = '-v'\n"
+        )
+        stack = detect_stack(self.tmpdir)
+        self.assertEqual(stack["test_cmd"], "pytest")
+
+    def test_detect_pyproject_ruff(self):
+        (self.tmpdir / "pyproject.toml").write_text(
+            "[tool.ruff]\nline-length = 100\n"
+        )
+        stack = detect_stack(self.tmpdir)
+        self.assertEqual(stack["lint_cmd"], "ruff check .")
+
+    def test_detect_makefile_targets(self):
+        (self.tmpdir / "Makefile").write_text(
+            "test:\n\tpytest\n\nlint:\n\truff check .\n"
+        )
+        stack = detect_stack(self.tmpdir)
+        self.assertEqual(stack["test_cmd"], "make test")
+        self.assertEqual(stack["lint_cmd"], "make lint")
+
+    def test_detect_migration_cmd_prisma(self):
+        (self.tmpdir / "package.json").write_text(json.dumps({
+            "dependencies": {"@prisma/client": "5.0.0"},
+            "devDependencies": {"prisma": "5.0.0"}
+        }))
+        stack = detect_stack(self.tmpdir)
+        self.assertEqual(stack["orm"], "prisma")
+        self.assertEqual(stack["migrate_cmd"], "npx prisma migrate dev")
+
+    def test_detect_migration_cmd_sqlalchemy(self):
+        (self.tmpdir / "requirements.txt").write_text("sqlalchemy==2.0.0\n")
+        stack = detect_stack(self.tmpdir)
+        self.assertEqual(stack["orm"], "sqlalchemy")
+        self.assertEqual(stack["migrate_cmd"], "alembic upgrade head")
+
+    def test_no_override_existing_cmds(self):
+        """If test_cmd is already set from package.json scripts, Makefile should not override."""
+        (self.tmpdir / "package.json").write_text(json.dumps({
+            "dependencies": {},
+            "devDependencies": {},
+            "scripts": {"test": "vitest"}
+        }))
+        (self.tmpdir / "Makefile").write_text("test:\n\tpytest\n")
+        stack = detect_stack(self.tmpdir)
+        # package.json scripts set test_cmd first, Makefile should not override
+        self.assertEqual(stack["test_cmd"], "npm run test")
+
+
+class TestDetectGitPlatform(unittest.TestCase):
+    """Test git platform detection from .git/config."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_detect_github(self):
+        git_dir = self.tmpdir / ".git"
+        git_dir.mkdir()
+        (git_dir / "config").write_text(
+            "[remote \"origin\"]\n\turl = git@github.com:user/repo.git\n"
+        )
+        stack = detect_stack(self.tmpdir)
+        self.assertEqual(stack["git_platform"], "github")
+
+    def test_detect_gitlab(self):
+        git_dir = self.tmpdir / ".git"
+        git_dir.mkdir()
+        (git_dir / "config").write_text(
+            "[remote \"origin\"]\n\turl = git@gitlab.com:user/repo.git\n"
+        )
+        stack = detect_stack(self.tmpdir)
+        self.assertEqual(stack["git_platform"], "gitlab")
+
+    def test_no_git_dir(self):
+        stack = detect_stack(self.tmpdir)
+        self.assertNotIn("git_platform", stack)
+
+
+class TestDetectCICD(unittest.TestCase):
+    """Test CI/CD detection from config files."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_detect_github_actions(self):
+        workflows = self.tmpdir / ".github" / "workflows"
+        workflows.mkdir(parents=True)
+        (workflows / "ci.yml").write_text("name: CI\n")
+        stack = detect_stack(self.tmpdir)
+        self.assertEqual(stack["ci_cd"], "github-actions")
+
+    def test_detect_gitlab_ci(self):
+        (self.tmpdir / ".gitlab-ci.yml").write_text("stages:\n  - test\n")
+        stack = detect_stack(self.tmpdir)
+        self.assertEqual(stack["ci_cd"], "gitlab-ci")
+
+    def test_no_ci(self):
+        stack = detect_stack(self.tmpdir)
+        self.assertNotIn("ci_cd", stack)
+
+
+class TestDetectHosting(unittest.TestCase):
+    """Test hosting platform detection."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_detect_vercel(self):
+        (self.tmpdir / "vercel.json").write_text("{}")
+        stack = detect_stack(self.tmpdir)
+        self.assertEqual(stack["hosting"], "vercel")
+
+    def test_detect_fly(self):
+        (self.tmpdir / "fly.toml").write_text("[app]\n")
+        stack = detect_stack(self.tmpdir)
+        self.assertEqual(stack["hosting"], "fly")
+
+    def test_detect_railway(self):
+        (self.tmpdir / "railway.toml").write_text("[build]\n")
+        stack = detect_stack(self.tmpdir)
+        self.assertEqual(stack["hosting"], "railway")
+
+    def test_detect_aws(self):
+        (self.tmpdir / "serverless.yml").write_text("service: my-api\n")
+        stack = detect_stack(self.tmpdir)
+        self.assertEqual(stack["hosting"], "aws")
+
+
+class TestDetectMonorepo(unittest.TestCase):
+    """Test monorepo detection."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_detect_turborepo(self):
+        (self.tmpdir / "turbo.json").write_text('{"pipeline": {}}')
+        (self.tmpdir / "pnpm-workspace.yaml").write_text("packages:\n  - 'apps/*'\n")
+        apps_web = self.tmpdir / "apps" / "web"
+        apps_web.mkdir(parents=True)
+        (apps_web / "package.json").write_text(json.dumps({"name": "@mono/web"}))
+        result = detect_monorepo(self.tmpdir)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["tool"], "turborepo")
+        self.assertTrue(len(result["packages"]) >= 1)
+        self.assertEqual(result["packages"][0]["name"], "@mono/web")
+
+    def test_detect_nx(self):
+        (self.tmpdir / "nx.json").write_text('{}')
+        apps_dir = self.tmpdir / "apps" / "api"
+        apps_dir.mkdir(parents=True)
+        (apps_dir / "package.json").write_text(json.dumps({"name": "@mono/api"}))
+        result = detect_monorepo(self.tmpdir)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["tool"], "nx")
+
+    def test_detect_pnpm_workspaces(self):
+        (self.tmpdir / "pnpm-workspace.yaml").write_text("packages:\n  - 'packages/*'\n")
+        pkg_dir = self.tmpdir / "packages" / "shared"
+        pkg_dir.mkdir(parents=True)
+        (pkg_dir / "package.json").write_text(json.dumps({"name": "@mono/shared"}))
+        result = detect_monorepo(self.tmpdir)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["tool"], "pnpm-workspaces")
+
+    def test_detect_yarn_workspaces(self):
+        (self.tmpdir / "package.json").write_text(json.dumps({
+            "workspaces": ["packages/*"],
+            "dependencies": {}
+        }))
+        pkg_dir = self.tmpdir / "packages" / "ui"
+        pkg_dir.mkdir(parents=True)
+        (pkg_dir / "package.json").write_text(json.dumps({"name": "@mono/ui"}))
+        result = detect_monorepo(self.tmpdir)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["tool"], "yarn-workspaces")
+
+    def test_detect_lerna(self):
+        (self.tmpdir / "lerna.json").write_text(json.dumps({"packages": ["packages/*"]}))
+        pkg_dir = self.tmpdir / "packages" / "core"
+        pkg_dir.mkdir(parents=True)
+        (pkg_dir / "package.json").write_text(json.dumps({"name": "@mono/core"}))
+        result = detect_monorepo(self.tmpdir)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["tool"], "lerna")
+
+    def test_no_monorepo(self):
+        (self.tmpdir / "package.json").write_text(json.dumps({
+            "dependencies": {"react": "18.0.0"},
+            "devDependencies": {}
+        }))
+        result = detect_monorepo(self.tmpdir)
+        self.assertIsNone(result)
+
+
+class TestDetectAIConfigs(unittest.TestCase):
+    """Test detection of other AI tool config files."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_detect_cursorrules(self):
+        (self.tmpdir / ".cursorrules").write_text("Always use TypeScript.\n")
+        found = detect_ai_configs(self.tmpdir)
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["source"], "cursor")
+        self.assertIn("TypeScript", found[0]["content"])
+
+    def test_detect_copilot_instructions(self):
+        gh_dir = self.tmpdir / ".github"
+        gh_dir.mkdir()
+        (gh_dir / "copilot-instructions.md").write_text("# Copilot Rules\nUse React.\n")
+        found = detect_ai_configs(self.tmpdir)
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["source"], "copilot")
+
+    def test_detect_multiple(self):
+        (self.tmpdir / ".cursorrules").write_text("Cursor rules here.\n")
+        (self.tmpdir / ".windsurfrules").write_text("Windsurf rules here.\n")
+        found = detect_ai_configs(self.tmpdir)
+        self.assertEqual(len(found), 2)
+        sources = {c["source"] for c in found}
+        self.assertIn("cursor", sources)
+        self.assertIn("windsurf", sources)
+
+    def test_no_ai_configs(self):
+        found = detect_ai_configs(self.tmpdir)
+        self.assertEqual(len(found), 0)
+
+
+class TestMigrateAIConfigs(unittest.TestCase):
+    """Test migration of AI configs to .claude/rules/."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_migrate_cursor(self):
+        configs = [{"source": "cursor", "path": ".cursorrules", "content": "Always use TypeScript.\n"}]
+        created = migrate_ai_configs(self.tmpdir, configs)
+        self.assertEqual(len(created), 1)
+        dest = self.tmpdir / ".claude" / "rules" / "migrated-cursor.md"
+        self.assertTrue(dest.exists())
+        content = dest.read_text()
+        self.assertIn("---", content)
+        self.assertIn("description: Rules migrated from cursor", content)
+        self.assertIn("Always use TypeScript.", content)
+        self.assertIn("Migrated from Cursor", content)
+
+    def test_migrate_copilot(self):
+        configs = [{"source": "copilot", "path": ".github/copilot-instructions.md", "content": "Use React hooks.\n"}]
+        created = migrate_ai_configs(self.tmpdir, configs)
+        self.assertEqual(len(created), 1)
+        dest = self.tmpdir / ".claude" / "rules" / "migrated-copilot.md"
+        self.assertTrue(dest.exists())
+        content = dest.read_text()
+        self.assertIn("Use React hooks.", content)
+
+    def test_skip_existing_migration(self):
+        rules_dir = self.tmpdir / ".claude" / "rules"
+        rules_dir.mkdir(parents=True)
+        (rules_dir / "migrated-cursor.md").write_text("existing content")
+        configs = [{"source": "cursor", "path": ".cursorrules", "content": "New rules.\n"}]
+        created = migrate_ai_configs(self.tmpdir, configs)
+        self.assertEqual(len(created), 0)
+        self.assertEqual((rules_dir / "migrated-cursor.md").read_text(), "existing content")
+
+    def test_creates_rules_dir(self):
+        self.assertFalse((self.tmpdir / ".claude" / "rules").exists())
+        configs = [{"source": "cursor", "path": ".cursorrules", "content": "Rules.\n"}]
+        migrate_ai_configs(self.tmpdir, configs)
+        self.assertTrue((self.tmpdir / ".claude" / "rules").exists())
+
+
+class TestSnapshotDependencies(unittest.TestCase):
+    """Test dependency snapshot creation from manifest files."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_snapshot_node_deps(self):
+        (self.tmpdir / "package.json").write_text(json.dumps({
+            "dependencies": {"react": "18.0.0", "next": "14.0.0"},
+            "devDependencies": {"typescript": "5.0.0"}
+        }))
+        snap = snapshot_dependencies(self.tmpdir)
+        self.assertIn("node", snap)
+        self.assertIn("react", snap["node"])
+        self.assertEqual(snap["node"]["react"], "18.0.0")
+        self.assertIn("typescript", snap["node"])
+
+    def test_snapshot_python_deps(self):
+        (self.tmpdir / "requirements.txt").write_text(
+            "fastapi==0.100.0\nsqlalchemy>=2.0.0\npytest\n"
+        )
+        snap = snapshot_dependencies(self.tmpdir)
+        self.assertIn("python", snap)
+        self.assertIn("fastapi", snap["python"])
+        self.assertEqual(snap["python"]["fastapi"], "0.100.0")
+        self.assertIn("pytest", snap["python"])
+
+    def test_snapshot_go_deps(self):
+        (self.tmpdir / "go.mod").write_text(
+            "module example.com/app\n\ngo 1.22\n\n"
+            "require (\n\tgithub.com/gin-gonic/gin v1.9.0\n\tgolang.org/x/net v0.10.0\n)\n"
+        )
+        snap = snapshot_dependencies(self.tmpdir)
+        self.assertIn("go", snap)
+        self.assertIn("github.com/gin-gonic/gin", snap["go"])
+        self.assertEqual(snap["go"]["github.com/gin-gonic/gin"], "v1.9.0")
+
+    def test_snapshot_empty_project(self):
+        snap = snapshot_dependencies(self.tmpdir)
+        self.assertEqual(snap, {})
+
+    def test_snapshot_mixed_project(self):
+        (self.tmpdir / "package.json").write_text(json.dumps({
+            "dependencies": {"express": "4.0.0"},
+            "devDependencies": {}
+        }))
+        (self.tmpdir / "requirements.txt").write_text("flask==2.0.0\n")
+        snap = snapshot_dependencies(self.tmpdir)
+        self.assertIn("node", snap)
+        self.assertIn("python", snap)
+        self.assertIn("express", snap["node"])
+        self.assertIn("flask", snap["python"])
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ from audit import (
     check_claude_md,
     check_commands_content,
     check_context_percentage,
+    check_dependency_drift,
     check_discoverability,
     check_handoff,
     check_mcp_servers,
@@ -820,6 +821,114 @@ class TestCheckStaleAnalyzerRules(unittest.TestCase):
         for issue in r.issues:
             if issue.get("fix"):
                 self.assertIn("evolve", issue["fix"].lower())
+
+
+class TestCheckDependencyDrift(unittest.TestCase):
+    """Test dependency drift detection between snapshots."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_no_snapshot_no_drift(self):
+        """No dependency_snapshot in config means no drift warnings."""
+        project_dir = make_project(self.tmpdir)
+        claude_dir = project_dir / ".claude"
+        (claude_dir / "launchpad-config.json").write_text(json.dumps({
+            "version": "6.0.0", "project_name": "test-app"
+        }))
+        r = AuditResult()
+        check_dependency_drift(project_dir, r)
+        drift_issues = [i for i in r.issues if "added since" in i.get("message", "")
+                        or "removed but" in i.get("message", "")]
+        self.assertEqual(len(drift_issues), 0)
+
+    def test_new_significant_package(self):
+        """Adding a significant package (jest) should trigger a warning."""
+        project_dir = make_project(self.tmpdir)
+        claude_dir = project_dir / ".claude"
+        # Snapshot without jest
+        (claude_dir / "launchpad-config.json").write_text(json.dumps({
+            "version": "6.0.0",
+            "dependency_snapshot": {
+                "node": {"react": "18.0.0", "next": "14.0.0"}
+            }
+        }))
+        # Current package.json now has jest
+        (project_dir / "package.json").write_text(json.dumps({
+            "dependencies": {"react": "18.0.0", "next": "14.0.0"},
+            "devDependencies": {"jest": "29.0.0"}
+        }))
+        r = AuditResult()
+        check_dependency_drift(project_dir, r)
+        drift_issues = [i for i in r.issues if "jest" in i.get("message", "")]
+        self.assertTrue(len(drift_issues) > 0)
+        self.assertIn("test", drift_issues[0]["message"].lower())
+
+    def test_removed_significant_package(self):
+        """Removing a significant package (prisma) should trigger a warning."""
+        project_dir = make_project(self.tmpdir)
+        claude_dir = project_dir / ".claude"
+        # Snapshot had prisma
+        (claude_dir / "launchpad-config.json").write_text(json.dumps({
+            "version": "6.0.0",
+            "dependency_snapshot": {
+                "node": {"react": "18.0.0", "@prisma/client": "5.0.0"}
+            }
+        }))
+        # Current package.json no longer has prisma
+        (project_dir / "package.json").write_text(json.dumps({
+            "dependencies": {"react": "18.0.0"},
+            "devDependencies": {}
+        }))
+        r = AuditResult()
+        check_dependency_drift(project_dir, r)
+        drift_issues = [i for i in r.issues if "prisma" in i.get("message", "").lower()]
+        self.assertTrue(len(drift_issues) > 0)
+        self.assertIn("removed", drift_issues[0]["message"].lower())
+
+    def test_insignificant_package_no_warning(self):
+        """Adding a non-significant package (lodash) should not trigger a warning."""
+        project_dir = make_project(self.tmpdir)
+        claude_dir = project_dir / ".claude"
+        (claude_dir / "launchpad-config.json").write_text(json.dumps({
+            "version": "6.0.0",
+            "dependency_snapshot": {
+                "node": {"react": "18.0.0"}
+            }
+        }))
+        # Adding lodash which is not in SIGNIFICANT_PACKAGES
+        (project_dir / "package.json").write_text(json.dumps({
+            "dependencies": {"react": "18.0.0", "lodash": "4.17.21"},
+            "devDependencies": {}
+        }))
+        r = AuditResult()
+        check_dependency_drift(project_dir, r)
+        drift_issues = [i for i in r.issues if "lodash" in i.get("message", "")]
+        self.assertEqual(len(drift_issues), 0)
+
+    def test_new_framework_warning(self):
+        """Adding a framework package (next) should trigger a framework change warning."""
+        project_dir = make_project(self.tmpdir)
+        claude_dir = project_dir / ".claude"
+        (claude_dir / "launchpad-config.json").write_text(json.dumps({
+            "version": "6.0.0",
+            "dependency_snapshot": {
+                "node": {"express": "4.0.0"}
+            }
+        }))
+        # Adding next framework
+        (project_dir / "package.json").write_text(json.dumps({
+            "dependencies": {"express": "4.0.0", "next": "14.0.0"},
+            "devDependencies": {}
+        }))
+        r = AuditResult()
+        check_dependency_drift(project_dir, r)
+        drift_issues = [i for i in r.issues if "next" in i.get("message", "").lower()]
+        self.assertTrue(len(drift_issues) > 0)
+        self.assertIn("framework", drift_issues[0]["message"].lower())
 
 
 if __name__ == "__main__":
