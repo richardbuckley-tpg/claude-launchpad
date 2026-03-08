@@ -13,9 +13,12 @@ Usage:
 import argparse
 import json
 import re
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+
+VERSION = "5.0.0"
 
 PROJECT_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*$')
 
@@ -55,6 +58,47 @@ MCP_CONTEXT_COST = 3000  # ~3,000 tokens per active MCP server
 
 # Valid top-level keys in settings.json
 VALID_SETTINGS_KEYS = {"hooks", "mcpServers", "permissions", "env", "model", "apiKey"}
+
+# Presets — common stack combinations
+PRESETS = {
+    "nextjs-fullstack": {
+        "frontend": "nextjs", "backend": "integrated", "database": "postgresql",
+        "orm": "prisma", "auth": "clerk", "hosting": "vercel",
+        "git_platform": "github", "ci_cd": "github-actions",
+        "conventional_commits": True, "tdd": True,
+    },
+    "nextjs-supabase": {
+        "frontend": "nextjs", "backend": "integrated", "database": "supabase",
+        "orm": "none", "auth": "supabase-auth", "hosting": "vercel",
+        "git_platform": "github", "ci_cd": "github-actions",
+        "conventional_commits": True,
+    },
+    "react-express": {
+        "frontend": "react-vite", "backend": "node-express", "database": "postgresql",
+        "orm": "prisma", "auth": "custom-jwt", "hosting": "railway",
+        "git_platform": "github", "ci_cd": "github-actions",
+    },
+    "fastapi": {
+        "frontend": "none", "backend": "python-fastapi", "database": "postgresql",
+        "orm": "sqlalchemy", "auth": "custom-jwt", "hosting": "railway",
+        "git_platform": "github", "ci_cd": "github-actions",
+    },
+    "go-api": {
+        "frontend": "none", "backend": "go", "database": "postgresql",
+        "orm": "none", "auth": "custom-jwt", "hosting": "aws",
+        "git_platform": "github", "ci_cd": "github-actions",
+    },
+    "sveltekit-fullstack": {
+        "frontend": "sveltekit", "backend": "integrated", "database": "postgresql",
+        "orm": "drizzle", "auth": "custom-jwt", "hosting": "vercel",
+        "git_platform": "github", "ci_cd": "github-actions",
+    },
+    "rails": {
+        "frontend": "none", "backend": "ruby-rails", "database": "postgresql",
+        "orm": "activerecord", "auth": "custom-jwt", "hosting": "railway",
+        "git_platform": "github", "ci_cd": "github-actions",
+    },
+}
 
 # ── Slash Commands ───────────────────────────────────────────────────────
 
@@ -182,7 +226,9 @@ Review $ARGUMENTS for complexity:
 3. Functions >50 lines that could decompose
 4. Stack-specific anti-patterns ({fe}/{be})
 
-Prioritize: high-impact simplifications first. Don't sacrifice readability for cleverness.
+Anti-patterns: Don't sacrifice readability for cleverness. Don't add abstraction for single-use code.
+
+Verify: Run lint + tests after changes. Confirm no behavior change.
 """))
 
     skills.append(("generate-feature", f"""---
@@ -198,7 +244,9 @@ Generate feature: $ARGUMENTS
 5. Add tests for core logic
 6. Update barrel exports or route registrations
 
-Stack: {fe} / {be} / {db}. Follow existing patterns — don't invent new ones.
+Anti-patterns: Don't invent new patterns — extend existing ones. Don't skip tests.
+
+Verify: All tests pass. New files follow existing naming conventions. No circular imports.
 """))
 
     # Frontend skills
@@ -217,7 +265,9 @@ Create {lib} component: $ARGUMENTS
 4. Co-located test file
 5. Add to barrel export if one exists
 
-Framework: {fe}. Keep under 150 lines — split if larger.
+Anti-patterns: Don't exceed 150 lines — split if larger. Don't mix concerns in one component.
+
+Verify: Component renders without errors. Props interface exported. Test file exists.
 """))
 
         skills.append(("generate-page", f"""---
@@ -233,7 +283,9 @@ Create page: $ARGUMENTS
 5. Auth protection if needed
 6. Basic test
 
-Framework: {fe}. Follow existing page patterns.
+Anti-patterns: Don't skip error/loading states. Don't fetch data in client components when server is available.
+
+Verify: Page loads without errors. SEO metadata present. Loading state works.
 """))
 
     # Backend / API skills
@@ -252,7 +304,9 @@ Create {api} endpoint: $ARGUMENTS
 5. Request/response types
 6. Integration tests
 
-Framework: {be}. Follow RESTful conventions.
+Anti-patterns: Don't skip input validation. Don't return raw DB errors to clients.
+
+Verify: All status codes tested. Auth checked. Input validation rejects bad data.
 """))
     elif fe in ("nextjs", "sveltekit"):
         rt = "Next.js API route" if fe == "nextjs" else "SvelteKit endpoint"
@@ -269,7 +323,9 @@ Create {rt}: $ARGUMENTS
 5. Request/response types
 6. Tests
 
-Framework: {fe} (integrated API).
+Anti-patterns: Don't skip validation. Don't expose internal errors.
+
+Verify: Status codes correct. Auth applied. Tests cover happy + error paths.
 """))
 
     # Database skills
@@ -288,7 +344,9 @@ Create model: $ARGUMENTS
 6. Add TypeScript types / Python dataclasses
 7. Create basic CRUD query layer
 
-Database: {db}. Follow existing schema patterns.
+Anti-patterns: Don't skip migrations. Don't create models without relationships to existing schema.
+
+Verify: Migration runs cleanly. Seed data loads. Types match schema.
 """))
 
         skills.append(("generate-crud", f"""---
@@ -305,7 +363,9 @@ CRUD for: $ARGUMENTS
 6. Tests for each operation
 7. API routes exposing operations
 
-Database: {db}. Follow existing data access patterns.
+Anti-patterns: Don't skip pagination on list. Don't return unbounded results.
+
+Verify: All 5 operations work. Validation rejects bad input. Pagination correct.
 """))
 
     # Auth skills
@@ -933,6 +993,191 @@ def get_env_example(database, auth, ai):
     return "\n".join(lines) + "\n"
 
 
+def get_github_actions_ci(args):
+    """Generate GitHub Actions CI workflow."""
+    test_cmd = getattr(args, 'test_cmd', None) or "npm run test"
+    lint_cmd = getattr(args, 'lint_cmd', None) or "npm run lint"
+    build_cmd = getattr(args, 'build_cmd', None) or "npm run build"
+    fe = args.frontend
+    be = args.backend
+
+    # Detect runtime
+    if be in ("python-fastapi", "python-django"):
+        runtime = "python"
+        setup = """      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt"""
+    elif be in ("go",):
+        runtime = "go"
+        setup = """      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'"""
+    elif be in ("rust-actix",):
+        runtime = "rust"
+        setup = """      - uses: dtolnay/rust-toolchain@stable"""
+    else:
+        runtime = "node"
+        setup = """      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci"""
+
+    return f"""name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+{setup}
+      - name: Lint
+        run: {lint_cmd}
+      - name: Test
+        run: {test_cmd}
+      - name: Build
+        run: {build_cmd}
+"""
+
+
+def get_gitlab_ci(args):
+    """Generate GitLab CI configuration."""
+    test_cmd = getattr(args, 'test_cmd', None) or "npm run test"
+    lint_cmd = getattr(args, 'lint_cmd', None) or "npm run lint"
+    build_cmd = getattr(args, 'build_cmd', None) or "npm run build"
+    be = args.backend
+
+    if be in ("python-fastapi", "python-django"):
+        image = "python:3.12"
+        install = "pip install -r requirements.txt"
+    elif be in ("go",):
+        image = "golang:1.22"
+        install = "go mod download"
+    else:
+        image = "node:20"
+        install = "npm ci"
+
+    return f"""image: {image}
+
+stages:
+  - lint
+  - test
+  - build
+
+before_script:
+  - {install}
+
+lint:
+  stage: lint
+  script:
+    - {lint_cmd}
+
+test:
+  stage: test
+  script:
+    - {test_cmd}
+
+build:
+  stage: build
+  script:
+    - {build_cmd}
+  only:
+    - main
+"""
+
+
+def get_pr_template():
+    """Generate a pull request template."""
+    return """## Summary
+<!-- What does this PR do? Why? -->
+
+## Changes
+<!-- List key changes -->
+-
+
+## Testing
+- [ ] Unit tests pass
+- [ ] Integration tests pass
+- [ ] Manual testing done
+
+## Checklist
+- [ ] Tests added/updated
+- [ ] No console.log or debug code
+- [ ] No secrets or .env values committed
+- [ ] ARCHITECTURE.md updated (if applicable)
+"""
+
+
+def get_first_feature_guide(args):
+    """Generate a getting-started guide for the first feature."""
+    fe = args.frontend
+    be = args.backend
+    test_cmd = getattr(args, 'test_cmd', None) or "npm run test"
+    lint_cmd = getattr(args, 'lint_cmd', None) or "npm run lint"
+
+    steps = [
+        f"# First Feature Guide — {args.project_name}\n",
+        "Follow these steps to build your first feature with Claude Code.\n",
+        "## 1. Plan",
+        "```",
+        "/new-feature <feature-name>",
+        "```",
+        "This creates a branch and presents a plan for approval.\n",
+        "## 2. Design",
+        "Use the architect agent to produce a blueprint:",
+        "```",
+        "@architect Design the <feature-name> feature",
+        "```",
+        "Review the blueprint in `docs/blueprints/`.\n",
+    ]
+
+    if fe and fe != "none":
+        steps.extend([
+            "## 3. Build Frontend",
+            f"Use skills to scaffold {fe} components:",
+            "```",
+            "/generate-component <ComponentName>",
+            "/generate-page <page-name>",
+            "```\n",
+        ])
+
+    if be and be not in ("none", "integrated"):
+        steps.extend([
+            "## 4. Build API",
+            f"Scaffold {be} endpoints:",
+            "```",
+            "/generate-endpoint <endpoint-name>",
+            "```\n",
+        ])
+
+    steps.extend([
+        "## 5. Test",
+        "Use the testing agent or TDD skill:",
+        "```",
+        f"@testing Write tests for <feature-name>",
+        f"# or run: {test_cmd}",
+        "```\n",
+        "## 6. Review & Push",
+        "```",
+        "@reviewer Review my changes",
+        "@push Create PR for <feature-name>",
+        "```\n",
+        "## 7. Wrap Up",
+        "```",
+        "/handoff",
+        "```",
+        "This saves session context for next time.\n",
+    ])
+
+    return "\n".join(steps)
+
+
 def get_handoff(project_name):
     """Generate initial handoff document."""
     return f"""# Session Handoff — {project_name}
@@ -1054,6 +1299,52 @@ def validate_settings(settings: dict) -> list[str]:
             warnings.append(f"mcpServers.{name} missing 'command'")
 
     return warnings
+
+
+def verify_scaffold(project_dir: Path, args) -> list[str]:
+    """Post-scaffold verification. Returns list of issues found."""
+    issues = []
+
+    # Check required directories exist
+    for subdir in ["agents", "rules", "skills", "commands"]:
+        d = project_dir / ".claude" / subdir
+        if not d.exists():
+            issues.append(f"Missing directory: .claude/{subdir}/")
+
+    # Check settings.json is valid
+    settings_path = project_dir / ".claude" / "settings.json"
+    if settings_path.exists():
+        try:
+            data = json.loads(settings_path.read_text())
+            # Check MCP servers have env vars documented
+            mcp = data.get("mcpServers", {})
+            env_example = project_dir / ".env.example"
+            if env_example.exists():
+                env_content = env_example.read_text()
+                for name, config in mcp.items():
+                    for env_key, env_val in config.get("env", {}).items():
+                        if env_val.startswith("${"):
+                            var_name = env_val.strip("${}")
+                            if var_name not in env_content:
+                                issues.append(f"MCP '{name}' needs {var_name} but it's not in .env.example")
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            issues.append("settings.json is not valid JSON")
+
+    # Check CLAUDE.md and ARCHITECTURE.md exist
+    for name in ["CLAUDE.md", "ARCHITECTURE.md"]:
+        if not (project_dir / name).exists():
+            issues.append(f"{name} not created")
+
+    # Verify lint/test commands are syntactically valid
+    for cmd_name, cmd_val in [("lint_cmd", getattr(args, 'lint_cmd', None)),
+                               ("test_cmd", getattr(args, 'test_cmd', None)),
+                               ("dev_cmd", getattr(args, 'dev_cmd', None)),
+                               ("build_cmd", getattr(args, 'build_cmd', None)),
+                               ("migrate_cmd", getattr(args, 'migrate_cmd', None))]:
+        if cmd_val and not SAFE_CMD_PATTERN.match(cmd_val):
+            issues.append(f"Command '{cmd_name}' ({cmd_val}) doesn't match allowed patterns")
+
+    return issues
 
 
 def print_token_summary(created_files: list[str], project_dir: Path, mcp_count: int):
@@ -1212,6 +1503,7 @@ def scaffold(args):
         ("claudeignore", ".claudeignore", get_claudeignore(args.frontend, args.backend)),
         ("env.example", ".env.example", get_env_example(args.database, args.auth or "none", args.ai)),
         ("handoff.md", ".claude/handoff.md", get_handoff(args.project_name)),
+        ("first-feature.md", "docs/first-feature.md", get_first_feature_guide(args)),
     ]
     results = []
     for label, rel_path, content in support_files:
@@ -1282,7 +1574,36 @@ def scaffold(args):
             created_files.append(name)
             print(f"  Created placeholder {name}")
 
-    # 8. Config metadata (routed through safe_write for consistency)
+    # 8. CI/CD and PR template
+    ci_cd = getattr(args, 'ci_cd', 'none') or 'none'
+    if ci_cd == "github-actions":
+        ci_dir = project_dir / ".github" / "workflows"
+        if not dry_run:
+            ci_dir.mkdir(parents=True, exist_ok=True)
+        ci_path = ci_dir / "ci.yml"
+        result = safe_write(ci_path, get_github_actions_ci(args), force, dry_run=dry_run)
+        if result != "skipped":
+            created_files.append(".github/workflows/ci.yml")
+            print("  Created .github/workflows/ci.yml")
+
+        # PR template
+        pr_dir = project_dir / ".github"
+        if not dry_run:
+            pr_dir.mkdir(parents=True, exist_ok=True)
+        pr_path = pr_dir / "pull_request_template.md"
+        result = safe_write(pr_path, get_pr_template(), force, dry_run=dry_run)
+        if result != "skipped":
+            created_files.append(".github/pull_request_template.md")
+            print("  Created .github/pull_request_template.md")
+
+    elif ci_cd == "gitlab-ci":
+        ci_path = project_dir / ".gitlab-ci.yml"
+        result = safe_write(ci_path, get_gitlab_ci(args), force, dry_run=dry_run)
+        if result != "skipped":
+            created_files.append(".gitlab-ci.yml")
+            print("  Created .gitlab-ci.yml")
+
+    # 9. Config metadata (routed through safe_write for consistency)
     metadata = {
         "project_name": args.project_name,
         "frontend": args.frontend, "backend": args.backend,
@@ -1299,7 +1620,7 @@ def scaffold(args):
         "test_cmd": getattr(args, 'test_cmd', None),
         "migrate_cmd": getattr(args, 'migrate_cmd', None),
         "scaffolded_at": datetime.now().isoformat(),
-        "version": "5.0.0",
+        "version": VERSION,
     }
     config_path = project_dir / ".claude" / "launchpad-config.json"
     if not dry_run:
@@ -1318,7 +1639,7 @@ def scaffold(args):
     if created_files and not dry_run:
         manifest_path = project_dir / ".claude" / "launchpad-manifest.json"
         manifest = {
-            "version": "5.0.0",
+            "version": VERSION,
             "created_at": datetime.now().isoformat(),
             "files": sorted(created_files),
         }
@@ -1332,7 +1653,77 @@ def scaffold(args):
     if created_files and not dry_run:
         print_token_summary(created_files, project_dir, len(mcp_servers))
 
+    # Post-scaffold verification
+    verify = getattr(args, 'verify', False)
+    if verify and not dry_run:
+        issues = verify_scaffold(project_dir, args)
+        if issues:
+            print(f"\n⚠ Verification found {len(issues)} issues:")
+            for issue in issues:
+                print(f"  - {issue}")
+        else:
+            print("\n✓ Verification passed — all checks clean")
+
     print("\nNext: Claude generates CLAUDE.md, ARCHITECTURE.md with real values from the interview.")
+    return 0
+
+
+def upgrade(project_dir: Path) -> int:
+    """Upgrade an existing Launchpad config to the current version."""
+    config_path = project_dir / ".claude" / "launchpad-config.json"
+    if not config_path.exists():
+        print("Error: No launchpad-config.json found. Is this a Launchpad project?", file=sys.stderr)
+        return 1
+
+    try:
+        config = json.loads(config_path.read_text())
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        print("Error: launchpad-config.json is not valid JSON", file=sys.stderr)
+        return 1
+
+    old_version = config.get("version", "unknown")
+    if old_version == VERSION:
+        print(f"Already at version {VERSION} — nothing to upgrade.")
+        return 0
+
+    print(f"Upgrading {config.get('project_name', 'project')} from v{old_version} to v{VERSION}")
+    changes = []
+
+    # Migration: add missing directories
+    for subdir in ["agents", "rules", "skills", "commands"]:
+        d = project_dir / ".claude" / subdir
+        if not d.exists():
+            d.mkdir(parents=True, exist_ok=True)
+            changes.append(f"Created missing .claude/{subdir}/")
+
+    # Migration: add first-feature guide if missing
+    guide_path = project_dir / "docs" / "first-feature.md"
+    if not guide_path.exists():
+        docs_dir = project_dir / "docs"
+        if not docs_dir.exists():
+            docs_dir.mkdir(parents=True, exist_ok=True)
+        # Create a minimal guide
+        guide_path.write_text("# First Feature Guide\n\nRun `/new-feature <name>` to start.\n")
+        changes.append("Created docs/first-feature.md")
+
+    # Migration: add handoff if missing
+    handoff_path = project_dir / ".claude" / "handoff.md"
+    if not handoff_path.exists():
+        handoff_path.write_text("# Session Handoff\n\n## What's Working\n- (not yet populated)\n\n## Next Steps\n1. Run /status\n")
+        changes.append("Created .claude/handoff.md")
+
+    # Update version in config
+    config["version"] = VERSION
+    config["upgraded_at"] = datetime.now().isoformat()
+    config_path.write_text(json.dumps(config, indent=2) + "\n")
+    changes.append(f"Updated version to {VERSION}")
+
+    if changes:
+        print(f"Applied {len(changes)} changes:")
+        for c in changes:
+            print(f"  ✓ {c}")
+    print(f"\nUpgrade complete. Run the auditor to check health:")
+    print(f"  python audit.py {project_dir}")
     return 0
 
 
@@ -1363,9 +1754,31 @@ def main():
     p.add_argument("--force", action="store_true", help="Overwrite existing files (default: skip existing)")
     p.add_argument("--update", action="store_true", help="Merge new config into existing files (add missing commands/skills/MCP)")
     p.add_argument("--dry-run", action="store_true", help="Show what would be created without writing any files")
+    p.add_argument("--verify", action="store_true", help="Run post-scaffold verification checks")
+    p.add_argument("--preset", choices=list(PRESETS.keys()), default=None, help="Use a preset stack configuration")
+    p.add_argument("--upgrade", action="store_true", help="Upgrade existing Launchpad config to current version")
     p.add_argument("--output-dir", default=".")
     p.add_argument("--create-root", action="store_true")
     args = p.parse_args()
+
+    # Handle --upgrade separately
+    if args.upgrade:
+        project_dir = Path(args.output_dir).resolve()
+        sys.exit(upgrade(project_dir))
+
+    # Apply preset defaults (user-specified flags override preset)
+    if args.preset:
+        preset = PRESETS[args.preset]
+        for key, value in preset.items():
+            # Only apply preset value if user didn't explicitly set it
+            # For store_true flags, default is False; for choices, check if it's the argparse default
+            current = getattr(args, key, None)
+            if key in ("conventional_commits", "tdd", "ai", "team", "sentry"):
+                # Boolean flags: only override if still False (default)
+                if not current:
+                    setattr(args, key, value)
+            elif current is None or current == "none":
+                setattr(args, key, value)
 
     # M1: Validate project name
     if not PROJECT_NAME_PATTERN.match(args.project_name):

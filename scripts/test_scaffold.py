@@ -20,6 +20,8 @@ from scaffold import (
     MCP_VERSIONS,
     MCP_CONTEXT_COST,
     VALID_SETTINGS_KEYS,
+    PRESETS,
+    VERSION,
     get_skills,
     get_mcp_servers,
     get_hooks,
@@ -28,10 +30,16 @@ from scaffold import (
     get_claudeignore,
     get_env_example,
     get_handoff,
+    get_first_feature_guide,
+    get_github_actions_ci,
+    get_gitlab_ci,
+    get_pr_template,
     safe_write,
     merge_settings,
     validate_settings,
+    verify_scaffold,
     print_token_summary,
+    upgrade,
     scaffold,
 )
 
@@ -61,6 +69,9 @@ def make_args(**overrides):
         "context7": False,
         "sequential_thinking": False,
         "minimal_mcp": False,
+        "verify": False,
+        "preset": None,
+        "dry_run": False,
         "force": False,
         "update": False,
         "output_dir": ".",
@@ -970,6 +981,206 @@ class TestNewSafeCmdPatterns(unittest.TestCase):
         allowed = ["cargo build", "cargo build --release"]
         for cmd in allowed:
             self.assertTrue(SAFE_CMD_PATTERN.match(cmd), f"Should be allowed: {cmd}")
+
+
+class TestEnhancedSkills(unittest.TestCase):
+    """Test that skills include verification and anti-pattern sections."""
+
+    def test_skills_have_verify_section(self):
+        args = make_args(frontend="nextjs", database="postgresql")
+        skills = get_skills(args)
+        for name, content in skills:
+            self.assertIn("Verify:", content,
+                        f"Skill '{name}' missing Verify section")
+
+    def test_skills_have_anti_patterns(self):
+        args = make_args(frontend="nextjs", database="postgresql")
+        skills = get_skills(args)
+        for name, content in skills:
+            self.assertIn("Anti-patterns:", content,
+                        f"Skill '{name}' missing Anti-patterns section")
+
+
+class TestFirstFeatureGuide(unittest.TestCase):
+    """Test first-feature guide generation."""
+
+    def test_guide_includes_project_name(self):
+        args = make_args(project_name="my-app")
+        guide = get_first_feature_guide(args)
+        self.assertIn("my-app", guide)
+
+    def test_guide_includes_frontend_steps(self):
+        args = make_args(frontend="nextjs")
+        guide = get_first_feature_guide(args)
+        self.assertIn("generate-component", guide)
+
+    def test_guide_skips_frontend_when_none(self):
+        args = make_args(frontend="none")
+        guide = get_first_feature_guide(args)
+        self.assertNotIn("generate-component", guide)
+
+    def test_guide_includes_backend_steps(self):
+        args = make_args(frontend="none", backend="python-fastapi")
+        guide = get_first_feature_guide(args)
+        self.assertIn("generate-endpoint", guide)
+
+
+class TestCiCdGeneration(unittest.TestCase):
+    """Test CI/CD configuration generation."""
+
+    def test_github_actions_node(self):
+        args = make_args(test_cmd="npm run test", lint_cmd="npm run lint", build_cmd="npm run build")
+        ci = get_github_actions_ci(args)
+        self.assertIn("npm run test", ci)
+        self.assertIn("npm run lint", ci)
+        self.assertIn("setup-node", ci)
+
+    def test_github_actions_python(self):
+        args = make_args(backend="python-fastapi", test_cmd="pytest", lint_cmd="ruff check .")
+        ci = get_github_actions_ci(args)
+        self.assertIn("setup-python", ci)
+        self.assertIn("pytest", ci)
+
+    def test_github_actions_go(self):
+        args = make_args(backend="go", test_cmd="go test ./...", lint_cmd="golangci-lint run")
+        ci = get_github_actions_ci(args)
+        self.assertIn("setup-go", ci)
+
+    def test_gitlab_ci_structure(self):
+        args = make_args(test_cmd="npm run test", lint_cmd="npm run lint")
+        ci = get_gitlab_ci(args)
+        self.assertIn("stages:", ci)
+        self.assertIn("lint:", ci)
+        self.assertIn("test:", ci)
+        self.assertIn("build:", ci)
+
+    def test_pr_template_has_checklist(self):
+        template = get_pr_template()
+        self.assertIn("## Summary", template)
+        self.assertIn("[ ]", template)  # Has checkboxes
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_scaffold_creates_ci_files(self):
+        args = make_args(output_dir=str(self.tmpdir), create_root=True, ci_cd="github-actions")
+        scaffold(args)
+        self.assertTrue((self.tmpdir / "test-app" / ".github" / "workflows" / "ci.yml").exists())
+        self.assertTrue((self.tmpdir / "test-app" / ".github" / "pull_request_template.md").exists())
+
+    def test_scaffold_creates_gitlab_ci(self):
+        args = make_args(output_dir=str(self.tmpdir), create_root=True, ci_cd="gitlab-ci")
+        scaffold(args)
+        self.assertTrue((self.tmpdir / "test-app" / ".gitlab-ci.yml").exists())
+
+
+class TestVerifyScaffold(unittest.TestCase):
+    """Test post-scaffold verification."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_verify_clean_scaffold(self):
+        args = make_args(output_dir=str(self.tmpdir), create_root=True)
+        scaffold(args)
+        project_dir = self.tmpdir / "test-app"
+        issues = verify_scaffold(project_dir, args)
+        self.assertEqual(len(issues), 0)
+
+    def test_verify_detects_missing_dirs(self):
+        project_dir = self.tmpdir / "test-app"
+        project_dir.mkdir()
+        (project_dir / ".claude").mkdir()
+        args = make_args()
+        issues = verify_scaffold(project_dir, args)
+        self.assertTrue(any("Missing directory" in i for i in issues))
+
+    def test_verify_detects_unsafe_command(self):
+        args = make_args(output_dir=str(self.tmpdir), create_root=True, lint_cmd="rm -rf /")
+        scaffold(args)
+        project_dir = self.tmpdir / "test-app"
+        issues = verify_scaffold(project_dir, args)
+        self.assertTrue(any("lint_cmd" in i for i in issues))
+
+
+class TestPresets(unittest.TestCase):
+    """Test preset stack configurations."""
+
+    def test_all_presets_have_required_keys(self):
+        required = {"frontend", "backend", "database"}
+        for name, preset in PRESETS.items():
+            for key in required:
+                self.assertIn(key, preset, f"Preset '{name}' missing '{key}'")
+
+    def test_nextjs_fullstack_preset(self):
+        preset = PRESETS["nextjs-fullstack"]
+        self.assertEqual(preset["frontend"], "nextjs")
+        self.assertEqual(preset["database"], "postgresql")
+        self.assertEqual(preset["orm"], "prisma")
+
+    def test_fastapi_preset(self):
+        preset = PRESETS["fastapi"]
+        self.assertEqual(preset["frontend"], "none")
+        self.assertEqual(preset["backend"], "python-fastapi")
+        self.assertEqual(preset["orm"], "sqlalchemy")
+
+    def test_preset_count(self):
+        self.assertGreaterEqual(len(PRESETS), 5, "Should have at least 5 presets")
+
+
+class TestUpgrade(unittest.TestCase):
+    """Test version upgrade logic."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_upgrade_updates_version(self):
+        project_dir = self.tmpdir / "project"
+        project_dir.mkdir()
+        claude_dir = project_dir / ".claude"
+        claude_dir.mkdir()
+        config = {"project_name": "test", "version": "4.0.0"}
+        (claude_dir / "launchpad-config.json").write_text(json.dumps(config))
+        result = upgrade(project_dir)
+        self.assertEqual(result, 0)
+        updated = json.loads((claude_dir / "launchpad-config.json").read_text())
+        self.assertEqual(updated["version"], VERSION)
+
+    def test_upgrade_no_config_fails(self):
+        project_dir = self.tmpdir / "empty"
+        project_dir.mkdir()
+        result = upgrade(project_dir)
+        self.assertEqual(result, 1)
+
+    def test_upgrade_already_current(self):
+        project_dir = self.tmpdir / "project"
+        project_dir.mkdir()
+        claude_dir = project_dir / ".claude"
+        claude_dir.mkdir()
+        config = {"project_name": "test", "version": VERSION}
+        (claude_dir / "launchpad-config.json").write_text(json.dumps(config))
+        result = upgrade(project_dir)
+        self.assertEqual(result, 0)
+
+    def test_upgrade_creates_missing_dirs(self):
+        project_dir = self.tmpdir / "project"
+        project_dir.mkdir()
+        claude_dir = project_dir / ".claude"
+        claude_dir.mkdir()
+        config = {"project_name": "test", "version": "4.0.0"}
+        (claude_dir / "launchpad-config.json").write_text(json.dumps(config))
+        upgrade(project_dir)
+        self.assertTrue((claude_dir / "agents").exists())
+        self.assertTrue((claude_dir / "rules").exists())
 
 
 class TestScaffoldWithAgentsAndRules(unittest.TestCase):

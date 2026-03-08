@@ -569,6 +569,143 @@ def check_commands_content(project_dir: Path, result: AuditResult):
             pass
 
 
+# ── Recommendations ────────────────────────────────────────────────────
+
+def generate_recommendations(project_dir: Path) -> list[dict]:
+    """Analyze project and suggest improvements beyond fixing issues."""
+    recommendations = []
+
+    # Check for missing agents
+    agents_dir = project_dir / ".claude" / "agents"
+    if agents_dir.exists():
+        existing_agents = {f.stem for f in agents_dir.glob("*.md")}
+        core_agents = {"architect", "testing", "reviewer", "debugger", "push"}
+        missing = core_agents - existing_agents
+        if missing:
+            recommendations.append({
+                "category": "agents",
+                "priority": "high",
+                "message": f"Missing core agents: {', '.join(sorted(missing))}",
+                "action": "Re-run scaffold or create these agents manually",
+            })
+    else:
+        recommendations.append({
+            "category": "agents",
+            "priority": "high",
+            "message": "No agents directory — agents automate common workflows",
+            "action": "Create .claude/agents/ with architect, testing, reviewer, debugger, push agents",
+        })
+
+    # Check for missing rules
+    rules_dir = project_dir / ".claude" / "rules"
+    if not rules_dir.exists() or not list(rules_dir.glob("*.md")):
+        # Try to detect stack for rule suggestions
+        has_package_json = (project_dir / "package.json").exists()
+        has_requirements = (project_dir / "requirements.txt").exists()
+        has_go_mod = (project_dir / "go.mod").exists()
+
+        if has_package_json or has_requirements or has_go_mod:
+            recommendations.append({
+                "category": "rules",
+                "priority": "medium",
+                "message": "No path-scoped rules — rules give Claude stack-specific guidance",
+                "action": "Create .claude/rules/ with frontend.md, backend.md, database.md",
+            })
+
+    # Check for missing skills
+    skills_dir = project_dir / ".claude" / "skills"
+    if not skills_dir.exists() or not list(skills_dir.glob("*.md")):
+        recommendations.append({
+            "category": "skills",
+            "priority": "medium",
+            "message": "No custom skills — skills provide reusable task templates",
+            "action": "Create .claude/skills/ with generate-feature.md, simplify.md at minimum",
+        })
+
+    # Check for missing commands
+    commands_dir = project_dir / ".claude" / "commands"
+    if commands_dir.exists():
+        existing_cmds = {f.stem for f in commands_dir.glob("*.md")}
+        essential_cmds = {"status", "handoff"}
+        missing = essential_cmds - existing_cmds
+        if missing:
+            recommendations.append({
+                "category": "commands",
+                "priority": "medium",
+                "message": f"Missing essential commands: {', '.join(sorted(missing))}",
+                "action": "Create these slash commands for better workflow",
+            })
+
+    # Check for MCP opportunities
+    settings_path = project_dir / ".claude" / "settings.json"
+    mcp_configured = False
+    if settings_path.exists():
+        try:
+            data = json.loads(settings_path.read_text())
+            mcp_configured = bool(data.get("mcpServers", {}))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass
+
+    if not mcp_configured:
+        # Check if project uses GitHub
+        git_dir = project_dir / ".git"
+        if git_dir.exists():
+            recommendations.append({
+                "category": "mcp",
+                "priority": "low",
+                "message": "No MCP servers configured — GitHub MCP enables issue/PR management from Claude",
+                "action": "Add GitHub MCP to .claude/settings.json",
+            })
+
+    # Check for missing .claudeignore
+    if not (project_dir / ".claudeignore").exists():
+        recommendations.append({
+            "category": "performance",
+            "priority": "medium",
+            "message": "No .claudeignore — Claude may waste tokens reading build artifacts and dependencies",
+            "action": "Create .claudeignore to exclude node_modules/, dist/, .env, etc.",
+        })
+
+    # Check CLAUDE.md for discoverability-first approach
+    claude_md = project_dir / "CLAUDE.md"
+    if claude_md.exists():
+        try:
+            content = claude_md.read_text()
+            if "## Commands" not in content and "## Build" not in content:
+                recommendations.append({
+                    "category": "claude-md",
+                    "priority": "high",
+                    "message": "CLAUDE.md missing build/test commands — these are the highest-value content",
+                    "action": "Add ## Commands section with dev, build, test, lint commands",
+                })
+        except UnicodeDecodeError:
+            pass
+
+    return recommendations
+
+
+def format_recommendations(recommendations: list[dict]) -> str:
+    """Format recommendations as human-readable output."""
+    if not recommendations:
+        return "No recommendations — your config looks comprehensive!"
+
+    lines = [
+        "Recommendations",
+        "─" * 40,
+    ]
+
+    # Sort by priority
+    priority_order = {"high": 0, "medium": 1, "low": 2}
+    sorted_recs = sorted(recommendations, key=lambda r: priority_order.get(r["priority"], 9))
+
+    for rec in sorted_recs:
+        icon = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(rec["priority"], "•")
+        lines.append(f"  {icon} [{rec['category']}] {rec['message']}")
+        lines.append(f"     → {rec['action']}")
+
+    return "\n".join(lines)
+
+
 # ── Auto-fix ───────────────────────────────────────────────────────────
 
 def apply_fixes(project_dir: Path, result: AuditResult) -> list[str]:
@@ -643,6 +780,7 @@ def main():
     parser.add_argument("project_dir", help="Project root directory to audit")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     parser.add_argument("--fix", action="store_true", help="Apply safe fixes automatically")
+    parser.add_argument("--recommend", action="store_true", help="Show recommendations for improving config")
     args = parser.parse_args()
 
     project_dir = Path(args.project_dir).resolve()
@@ -673,9 +811,16 @@ def main():
     result = audit(project_dir)
 
     if args.json:
-        print(json.dumps(result.to_dict(), indent=2))
+        output = result.to_dict()
+        if args.recommend:
+            output["recommendations"] = generate_recommendations(project_dir)
+        print(json.dumps(output, indent=2))
     else:
         print(format_report(result))
+        if args.recommend:
+            print()
+            recs = generate_recommendations(project_dir)
+            print(format_recommendations(recs))
 
     # Exit code: 0 if score >= 60, 1 if below
     sys.exit(0 if result.score >= 60 else 1)

@@ -31,6 +31,8 @@ from audit import (
     count_lines,
     estimate_tokens,
     format_report,
+    format_recommendations,
+    generate_recommendations,
 )
 
 
@@ -635,6 +637,62 @@ class TestCategoryScoring(unittest.TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.tmpdir)
+
+
+class TestRecommendations(unittest.TestCase):
+    """Test audit --recommend mode."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_recommends_missing_agents(self):
+        project_dir = make_project(self.tmpdir, handoff=True)
+        recs = generate_recommendations(project_dir)
+        agent_recs = [r for r in recs if r["category"] == "agents"]
+        self.assertTrue(len(agent_recs) > 0)
+
+    def test_recommends_missing_claudeignore(self):
+        project_dir = make_project(self.tmpdir, handoff=True)
+        recs = generate_recommendations(project_dir)
+        perf_recs = [r for r in recs if r["category"] == "performance"]
+        self.assertTrue(len(perf_recs) > 0)
+
+    def test_no_recommendations_for_complete_project(self):
+        project_dir = make_project(
+            self.tmpdir,
+            agents={"architect": "---\nname: a\n---\n", "testing": "---\nname: t\n---\n",
+                    "reviewer": "---\nname: r\n---\n", "debugger": "---\nname: d\n---\n",
+                    "push": "---\nname: p\n---\n"},
+            commands={"status": "---\ndescription: s\n---\n", "handoff": "---\ndescription: h\n---\n"},
+            settings={"mcpServers": {"gh": {"command": "npx"}}},
+            handoff=True,
+        )
+        # Create .claudeignore, skills, rules
+        (project_dir / ".claudeignore").write_text("node_modules/\n")
+        skills_dir = project_dir / ".claude" / "skills"
+        skills_dir.mkdir()
+        (skills_dir / "simplify.md").write_text("---\ndescription: s\n---\nSimplify.\n")
+        rules_dir = project_dir / ".claude" / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "frontend.md").write_text("---\nglobs: [\"*.ts\"]\n---\nRules.\n")
+        # Add Commands section to CLAUDE.md
+        (project_dir / "CLAUDE.md").write_text("# Project\n## Commands\nnpm run dev\n")
+
+        recs = generate_recommendations(project_dir)
+        self.assertEqual(len(recs), 0, f"Expected no recommendations, got: {recs}")
+
+    def test_format_recommendations_output(self):
+        recs = [{"category": "agents", "priority": "high", "message": "Missing agents", "action": "Add them"}]
+        output = format_recommendations(recs)
+        self.assertIn("Missing agents", output)
+        self.assertIn("Add them", output)
+
+    def test_format_empty_recommendations(self):
+        output = format_recommendations([])
+        self.assertIn("comprehensive", output.lower())
 
 
 class TestCheckDiscoverability(unittest.TestCase):
