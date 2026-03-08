@@ -41,6 +41,7 @@ from scaffold import (
     print_token_summary,
     upgrade,
     scaffold,
+    cmd_build,
 )
 
 
@@ -70,6 +71,8 @@ def make_args(**overrides):
         "sequential_thinking": False,
         "minimal_mcp": False,
         "verify": False,
+        "domain": "general",
+        "compliance": ["none"],
         "preset": None,
         "dry_run": False,
         "force": False,
@@ -1221,6 +1224,227 @@ class TestScaffoldWithAgentsAndRules(unittest.TestCase):
         self.assertEqual(data["ci_cd"], "github-actions")
         self.assertEqual(data["dev_cmd"], "npm run dev")
         self.assertEqual(data["version"], "6.0.0")
+
+
+class TestDomainAuditorAgents(unittest.TestCase):
+    """Test domain-specific auditor agent generation."""
+
+    def test_general_domain_no_domain_agents(self):
+        args = make_args(domain="general", compliance=["none"])
+        agents = get_agents(args)
+        names = [a[0] for a in agents]
+        self.assertNotIn("compliance-auditor", names)
+        self.assertNotIn("frontend-auditor", names)
+        self.assertNotIn("architecture-auditor", names)
+
+    def test_finance_domain_generates_compliance_auditor(self):
+        args = make_args(domain="finance", compliance=["sox"])
+        agents = get_agents(args)
+        names = [a[0] for a in agents]
+        self.assertIn("compliance-auditor", names)
+
+    def test_finance_generates_architecture_auditor(self):
+        args = make_args(domain="finance")
+        agents = get_agents(args)
+        names = [a[0] for a in agents]
+        self.assertIn("architecture-auditor", names)
+
+    def test_healthcare_generates_all_three(self):
+        args = make_args(domain="healthcare", frontend="nextjs", compliance=["hipaa"])
+        agents = get_agents(args)
+        names = [a[0] for a in agents]
+        self.assertIn("compliance-auditor", names)
+        self.assertIn("frontend-auditor", names)
+        self.assertIn("architecture-auditor", names)
+
+    def test_ecommerce_no_architecture_auditor(self):
+        args = make_args(domain="e-commerce", frontend="react-vite", compliance=["pci-dss"])
+        agents = get_agents(args)
+        names = [a[0] for a in agents]
+        self.assertIn("compliance-auditor", names)
+        self.assertIn("frontend-auditor", names)
+        self.assertNotIn("architecture-auditor", names)
+
+    def test_compliance_only_triggers_auditor(self):
+        args = make_args(domain="general", compliance=["gdpr"])
+        agents = get_agents(args)
+        names = [a[0] for a in agents]
+        self.assertIn("compliance-auditor", names)
+
+    def test_domain_agents_have_stop_conditions(self):
+        args = make_args(domain="finance", frontend="nextjs", compliance=["sox", "gdpr"])
+        agents = get_agents(args)
+        domain_agents = [(n, c) for n, c in agents if "auditor" in n]
+        self.assertTrue(len(domain_agents) >= 1)
+        for name, content in domain_agents:
+            self.assertIn("STOP", content, f"Agent '{name}' missing STOP condition")
+
+    def test_compliance_auditor_references_skills(self):
+        args = make_args(domain="finance", compliance=["sox", "gdpr"])
+        agents = get_agents(args)
+        comp_agent = [c for n, c in agents if n == "compliance-auditor"][0]
+        self.assertIn("finance-domain-rules", comp_agent)
+        self.assertIn("sox-rules", comp_agent)
+        self.assertIn("gdpr-rules", comp_agent)
+
+    def test_hr_generates_frontend_auditor(self):
+        args = make_args(domain="hr", frontend="nextjs", compliance=["gdpr"])
+        agents = get_agents(args)
+        names = [a[0] for a in agents]
+        self.assertIn("frontend-auditor", names)
+        # HR is not in the architecture-auditor list
+        self.assertNotIn("architecture-auditor", names)
+
+    def test_legal_generates_architecture_auditor(self):
+        args = make_args(domain="legal")
+        agents = get_agents(args)
+        names = [a[0] for a in agents]
+        self.assertIn("architecture-auditor", names)
+
+    def test_no_frontend_no_frontend_auditor(self):
+        args = make_args(domain="finance", frontend="none")
+        agents = get_agents(args)
+        names = [a[0] for a in agents]
+        self.assertNotIn("frontend-auditor", names)
+
+
+class TestDomainSkills(unittest.TestCase):
+    """Test domain knowledge skill generation."""
+
+    def test_finance_generates_domain_skill(self):
+        args = make_args(domain="finance", compliance=["sox"])
+        skills = get_skills(args)
+        names = [s[0] for s in skills]
+        self.assertIn("finance-domain-rules", names)
+        self.assertIn("sox-rules", names)
+
+    def test_gdpr_generates_skill(self):
+        args = make_args(compliance=["gdpr"])
+        skills = get_skills(args)
+        names = [s[0] for s in skills]
+        self.assertIn("gdpr-rules", names)
+
+    def test_hipaa_generates_skill(self):
+        args = make_args(compliance=["hipaa"])
+        skills = get_skills(args)
+        names = [s[0] for s in skills]
+        self.assertIn("hipaa-rules", names)
+
+    def test_pci_dss_generates_skill(self):
+        args = make_args(compliance=["pci-dss"])
+        skills = get_skills(args)
+        names = [s[0] for s in skills]
+        self.assertIn("pci-dss-rules", names)
+
+    def test_multiple_compliance(self):
+        args = make_args(domain="finance", compliance=["gdpr", "sox", "pci-dss"])
+        skills = get_skills(args)
+        names = [s[0] for s in skills]
+        self.assertIn("finance-domain-rules", names)
+        self.assertIn("gdpr-rules", names)
+        self.assertIn("sox-rules", names)
+        self.assertIn("pci-dss-rules", names)
+
+    def test_general_no_domain_skills(self):
+        args = make_args(domain="general", compliance=["none"])
+        skills = get_skills(args)
+        names = [s[0] for s in skills]
+        domain_skill_names = [n for n in names if n.endswith("-rules")]
+        self.assertEqual(len(domain_skill_names), 0)
+
+    def test_healthcare_generates_domain_skill(self):
+        args = make_args(domain="healthcare")
+        skills = get_skills(args)
+        names = [s[0] for s in skills]
+        self.assertIn("healthcare-domain-rules", names)
+
+    def test_domain_skills_have_frontmatter(self):
+        args = make_args(domain="finance", compliance=["gdpr", "sox"])
+        skills = get_skills(args)
+        domain_skills = [(n, c) for n, c in skills if n.endswith("-rules")]
+        for name, content in domain_skills:
+            self.assertTrue(content.strip().startswith("---"), f"Skill '{name}' missing frontmatter")
+            self.assertIn("description:", content, f"Skill '{name}' missing description")
+
+    def test_domain_skills_have_learn_reference(self):
+        """All domain skills should tell users to extend via /learn."""
+        args = make_args(domain="hr", compliance=["gdpr"])
+        skills = get_skills(args)
+        domain_skills = [(n, c) for n, c in skills if n.endswith("-rules")]
+        for name, content in domain_skills:
+            self.assertIn("/learn", content, f"Skill '{name}' missing /learn reference")
+
+
+class TestDomainBuildPipeline(unittest.TestCase):
+    """Test /build command includes domain audit step when applicable."""
+
+    def test_build_includes_domain_audit_when_domain_set(self):
+        content = cmd_build(domain="finance", compliance=["sox"])
+        self.assertIn("Domain Audit", content)
+        self.assertIn("compliance-auditor", content)
+
+    def test_build_no_domain_audit_for_general(self):
+        content = cmd_build(domain="general", compliance=["none"])
+        self.assertNotIn("Domain Audit", content)
+        self.assertNotIn("compliance-auditor", content)
+
+    def test_build_domain_audit_with_compliance_only(self):
+        content = cmd_build(domain="general", compliance=["gdpr"])
+        self.assertIn("Domain Audit", content)
+
+    def test_build_has_7_steps_with_domain(self):
+        content = cmd_build(domain="finance", compliance=["sox"])
+        self.assertIn("7.", content)
+
+    def test_build_has_6_steps_without_domain(self):
+        content = cmd_build(domain="general", compliance=["none"])
+        self.assertIn("6.", content)
+        self.assertNotIn("7.", content)
+
+
+class TestDomainScaffoldIntegration(unittest.TestCase):
+    """Test full scaffold with domain options."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_finance_scaffold_creates_domain_files(self):
+        args = make_args(
+            output_dir=str(self.tmpdir), create_root=True,
+            domain="finance", compliance=["sox", "gdpr"]
+        )
+        scaffold(args)
+        project = self.tmpdir / "test-app"
+        agents_dir = project / ".claude" / "agents"
+        skills_dir = project / ".claude" / "skills"
+
+        self.assertTrue((agents_dir / "compliance-auditor.md").exists())
+        self.assertTrue((agents_dir / "architecture-auditor.md").exists())
+        self.assertTrue((skills_dir / "finance-domain-rules.md").exists())
+        self.assertTrue((skills_dir / "sox-rules.md").exists())
+        self.assertTrue((skills_dir / "gdpr-rules.md").exists())
+
+    def test_metadata_includes_domain(self):
+        args = make_args(
+            output_dir=str(self.tmpdir), create_root=True,
+            domain="healthcare", compliance=["hipaa"]
+        )
+        scaffold(args)
+        config_path = self.tmpdir / "test-app" / ".claude" / "launchpad-config.json"
+        data = json.loads(config_path.read_text())
+        self.assertEqual(data["domain"], "healthcare")
+        self.assertEqual(data["compliance"], ["hipaa"])
+
+    def test_general_domain_no_domain_agents_created(self):
+        args = make_args(output_dir=str(self.tmpdir), create_root=True)
+        scaffold(args)
+        agents_dir = self.tmpdir / "test-app" / ".claude" / "agents"
+        self.assertFalse((agents_dir / "compliance-auditor.md").exists())
+        self.assertFalse((agents_dir / "frontend-auditor.md").exists())
+        self.assertFalse((agents_dir / "architecture-auditor.md").exists())
 
 
 if __name__ == "__main__":

@@ -205,8 +205,22 @@ Pipeline:
 6. **Push**: Branch, commit, PR (use push agent)
 """
 
-def cmd_build():
-    return """---
+def cmd_build(domain="general", compliance=None):
+    has_domain = domain != "general"
+    has_compliance = compliance and compliance != ['none'] and 'none' not in compliance
+
+    domain_step = ""
+    if has_domain or has_compliance:
+        domain_step = """
+5. **Domain Audit**: Run `@compliance-auditor Audit "$ARGUMENTS" for domain compliance`
+   - Must PASS before review — non-compliant findings block the PR
+   - Read domain knowledge skills for applicable rules
+"""
+        review_num, ship_num = "6", "7"
+    else:
+        review_num, ship_num = "5", "6"
+
+    return f"""---
 description: Full feature pipeline — design, build, test, review, ship
 ---
 
@@ -228,11 +242,11 @@ Execute the full development pipeline with context passing through blueprints:
 4. **Test**: Run `@testing Write tests for "$ARGUMENTS"`
    - Tests are based on the blueprint, not the implementation
    - Must pass before continuing
-
-5. **Review**: Run `@reviewer Review all changes`
+{domain_step}
+{review_num}. **Review**: Run `@reviewer Review all changes`
    - Must APPROVE before shipping
 
-6. **Ship**: Run `@push Create PR for "$ARGUMENTS"`
+{ship_num}. **Ship**: Run `@push Create PR for "$ARGUMENTS"`
 
 Update `.claude/handoff.md` after completion.
 """
@@ -503,6 +517,378 @@ Add AI feature: $ARGUMENTS
 6. Caching if responses are deterministic
 7. Cost tracking/logging
 8. Tests with mocked AI responses
+"""))
+
+    # ── Domain knowledge skills (curated rule sets) ──
+    domain = getattr(args, 'domain', 'general')
+    compliance = getattr(args, 'compliance', ['none']) or ['none']
+
+    if domain == "finance":
+        skills.append(("finance-domain-rules", """---
+description: Finance domain rules for code review and architecture decisions
+---
+
+**Not legal/financial advice — verify with your compliance team.**
+
+**Monetary Calculations**
+- Use decimal/BigDecimal types for ALL money — never floating point
+- Store amounts as smallest unit (pence/cents) in integers when possible
+- Currency must always travel with amount (never assume GBP/USD)
+- Rounding: use banker's rounding (half-even) unless regulation specifies otherwise
+
+**Audit Trail**
+- Every financial transaction must have an immutable audit log entry
+- Log: who, what, when, before-value, after-value, reason
+- Audit records are append-only — never update or delete
+- Retain audit logs per regulatory requirement (typically 7 years)
+
+**Double-Entry Bookkeeping**
+- Every transaction must have balanced debits and credits
+- Chart of accounts must be consistent — validate account codes
+- Period-end closing must prevent backdated entries
+
+**UK-Specific (VAT / HMRC)**
+- VAT calculations: apply rate to net amount, round per-line-item
+- MTD (Making Tax Digital): maintain digital records, API submission capability
+- FRS 102 reporting format if applicable
+
+**Security**
+- Financial data encrypted at rest and in transit
+- Role-based access: segregation of duties (approver ≠ initiator)
+- Payment operations require idempotency keys
+
+Use /learn to add project-specific finance rules.
+"""))
+
+    elif domain == "healthcare":
+        skills.append(("healthcare-domain-rules", """---
+description: Healthcare domain rules for code review and architecture decisions
+---
+
+**Not medical or legal advice — verify with your compliance team.**
+
+**Patient Data (PHI/PII)**
+- Minimum necessary: only access/display data needed for the task
+- Never log PHI in plaintext — redact or use tokens
+- Display masking: show partial identifiers (***-**-1234)
+- De-identification: follow Safe Harbor or Expert Determination method
+
+**Clinical Data Integrity**
+- Medication dosages: validate against safe ranges, flag outliers
+- Lab results: include reference ranges and units with every value
+- Date/time: always store in UTC with timezone, display in local time
+- Clinical decisions: log the data that informed each decision
+
+**Access Control**
+- Role-based: clinician, nurse, admin, patient — different data views
+- Break-glass access: allow emergency override with mandatory audit
+- Session timeout: auto-logout after inactivity (typically 15 min)
+
+**Interoperability**
+- Use HL7 FHIR for data exchange where applicable
+- ICD-10 codes for diagnoses, SNOMED CT for clinical terms
+- Standardized medication codes (RxNorm/dm+d)
+
+**Consent**
+- Track patient consent per data use purpose
+- Consent withdrawal must cascade to all downstream systems
+
+Use /learn to add project-specific healthcare rules.
+"""))
+
+    elif domain == "hr":
+        skills.append(("hr-domain-rules", """---
+description: HR domain rules for code review and architecture decisions
+---
+
+**Not legal advice — verify with your legal/HR compliance team.**
+
+**Employee Data**
+- PII classification: name, DOB, NI/SSN, salary are highly sensitive
+- Access segregation: managers see their reports only, HR sees all
+- Right to access: employees can request their complete data file
+- Retention: delete/anonymize data after employment ends + retention period
+
+**Payroll**
+- Salary calculations: use decimal types, never floating point
+- Tax codes/brackets: must be configurable, not hardcoded
+- Payslip data is confidential — encrypt at rest, access-controlled
+
+**Recruitment**
+- Anonymize candidate data for bias-free screening where required
+- Right to erasure: unsuccessful candidates can request deletion
+- Equal opportunities monitoring: store separately from application data
+
+**Leave & Absence**
+- Statutory entitlements vary by jurisdiction — make configurable
+- Medical/sick leave reasons are sensitive — restricted access
+- Accrual calculations: handle part-time pro-rata correctly
+
+**Reporting**
+- Aggregated reports only — never expose individual data in dashboards
+- Gender pay gap reporting: anonymize before analysis
+- Headcount/turnover metrics: define calculation methodology clearly
+
+Use /learn to add project-specific HR rules.
+"""))
+
+    elif domain == "e-commerce":
+        skills.append(("ecommerce-domain-rules", """---
+description: E-commerce domain rules for code review and architecture decisions
+---
+
+**Not legal advice — verify with your compliance team.**
+
+**Pricing & Payments**
+- Store prices as integers in smallest currency unit (pence/cents)
+- Tax calculations: apply per jurisdiction rules, never hardcode rates
+- Display: always show currency symbol, tax-inclusive where required by law
+- Payment amounts: validate server-side — never trust client-submitted totals
+- Idempotency keys on all payment operations
+
+**Inventory**
+- Stock checks at cart-add AND checkout (prevent overselling)
+- Concurrent purchase handling: use optimistic locking or reservations
+- Backorder logic must be explicit — never silently accept unavailable items
+
+**Order Lifecycle**
+- State machine for order status: placed → paid → fulfilled → delivered
+- Every state transition logged with timestamp and actor
+- Cancellation/refund logic must handle partial fulfillment
+
+**Consumer Rights**
+- Cooling-off period: 14 days for online purchases (EU/UK)
+- Returns: clear process, automated refund triggers
+- Price display: final price including all taxes and fees shown before checkout
+
+**Performance**
+- Product catalog: paginated, cached, searchable
+- Checkout flow: minimize steps, handle payment gateway timeouts gracefully
+- Cart: handle session expiry and cart recovery
+
+Use /learn to add project-specific e-commerce rules.
+"""))
+
+    elif domain == "legal":
+        skills.append(("legal-domain-rules", """---
+description: Legal domain rules for code review and architecture decisions
+---
+
+**Not legal advice — verify with your legal compliance team.**
+
+**Document Management**
+- Version control: every edit creates a new version, previous versions immutable
+- Audit trail: who viewed/edited/shared each document, when
+- Retention policies: configurable per document type, enforce automatically
+- Redaction: must be irreversible — strip from all copies including metadata
+
+**Client Confidentiality**
+- Matter-based access control: users see only matters they're assigned to
+- Chinese walls: prevent conflicts of interest across matters
+- No cross-matter data leakage in search, reporting, or suggestions
+
+**Data Handling**
+- Privileged communications: flag and protect from disclosure
+- Legal hold: freeze deletion of documents relevant to litigation
+- Export: support court-mandated formats and pagination
+
+**Time & Billing**
+- Time entries: record in 6-minute increments (0.1 hour) by default
+- Billing narratives: must be detailed enough for client review
+- Rate cards: version-controlled, effective-dated
+
+**Compliance**
+- Know Your Client (KYC) checks for new matters
+- Anti-money laundering (AML) screening where applicable
+- Regulatory deadlines: track and alert on approaching deadlines
+
+Use /learn to add project-specific legal rules.
+"""))
+
+    elif domain == "education":
+        skills.append(("education-domain-rules", """---
+description: Education domain rules for code review and architecture decisions
+---
+
+**Not legal advice — verify with your compliance team.**
+
+**Student Data**
+- Minors' data requires parental consent for collection
+- Age-appropriate privacy: stricter rules for under-13 (COPPA) / under-16 (GDPR)
+- Student records: access limited to authorized staff and the student/parent
+
+**Assessment & Grading**
+- Grade calculations: clearly defined, auditable methodology
+- Moderation: support second-marking and external examiner workflows
+- Results are sensitive until published — access-controlled before release date
+- Academic integrity: flag potential plagiarism, maintain evidence chain
+
+**Accessibility**
+- WCAG 2.1 AA compliance minimum for all learning content
+- Content must work with screen readers and keyboard-only navigation
+- Provide alternatives: captions for video, alt text for images, transcripts for audio
+- Adjustable time limits for timed assessments
+
+**Safeguarding**
+- Report concerns workflow: staff can flag issues confidentially
+- Communication logs: retain all student-staff communications
+- DBS/background check status tracking for staff
+
+**Content Delivery**
+- Offline access support where possible
+- Progress tracking: save state, resume capability
+- Multi-format content: handle video, PDF, interactive, SCORM
+
+Use /learn to add project-specific education rules.
+"""))
+
+    # ── Compliance-specific rules (can apply to any domain) ──
+    if "gdpr" in compliance:
+        skills.append(("gdpr-rules", """---
+description: GDPR compliance rules for code review and architecture decisions
+---
+
+**Reference checklist — not legal advice. Verify with your DPO/legal team.**
+
+**Data Collection**
+- Lawful basis documented for every personal data field
+- Consent: explicit opt-in, no pre-ticked boxes, easy withdrawal
+- Data minimization: only collect what's needed for stated purpose
+- Privacy notice: clear, accessible, linked before data collection
+
+**Data Subject Rights (implement all)**
+- Right to access: export user data as JSON/CSV via API endpoint
+- Right to erasure: hard-delete or anonymize on request, cascade to backups
+- Right to portability: machine-readable export format
+- Right to rectification: users can update their own data
+- Right to restrict processing: flag to pause processing without deletion
+
+**Technical Measures**
+- Encryption at rest (AES-256) and in transit (TLS 1.2+)
+- Pseudonymization where possible (separate identifiers from data)
+- Data Processing Agreements with all third-party processors
+- Breach notification: 72-hour reporting capability built in
+
+**Code-Level Rules**
+- Never log PII (names, emails, IPs) without redaction
+- Cookie consent: required before non-essential cookies/tracking
+- Analytics must respect DNT and consent preferences
+- API responses must not over-expose personal data fields
+- Retention: auto-delete/anonymize after defined period
+- Cross-border transfers: verify adequacy decision or use SCCs
+
+Use /learn to add project-specific GDPR rules.
+"""))
+
+    if "hipaa" in compliance:
+        skills.append(("hipaa-rules", """---
+description: HIPAA compliance rules for code review and architecture decisions
+---
+
+**Reference checklist — not legal advice. Verify with your compliance officer.**
+
+**Protected Health Information (PHI)**
+- Minimum necessary rule: only access/transmit PHI needed for the task
+- PHI includes: name, DOB, SSN, medical record numbers, health data, photos
+- De-identification: Safe Harbor (remove 18 identifiers) or Expert Determination
+
+**Technical Safeguards**
+- Encryption: AES-256 at rest, TLS 1.2+ in transit — no exceptions
+- Access control: unique user IDs, role-based, automatic logoff
+- Audit controls: log all PHI access — who, what, when, from where
+- Integrity controls: detect unauthorized PHI alteration
+
+**Administrative Safeguards**
+- Business Associate Agreements (BAAs) with all vendors handling PHI
+- Workforce training records: track who completed HIPAA training
+- Incident response: document and report breaches within 60 days
+- Risk assessments: periodic, documented, with remediation tracking
+
+**Code-Level Rules**
+- Never log PHI in plaintext — use tokenization or redaction
+- Error messages must not expose PHI
+- Test data: never use real PHI — use synthetic data generators
+- API responses: include only minimum necessary PHI fields
+- Session management: auto-timeout after 15 min inactivity
+- Backup encryption: same standard as primary storage
+
+Use /learn to add project-specific HIPAA rules.
+"""))
+
+    if "sox" in compliance:
+        skills.append(("sox-rules", """---
+description: SOX compliance rules for code review and architecture decisions
+---
+
+**Reference checklist — not legal advice. Verify with your compliance team.**
+
+**Internal Controls (Section 404)**
+- Segregation of duties: no single user can initiate, approve, AND record transactions
+- Access reviews: quarterly review of who has access to financial systems
+- Change management: all code changes to financial calculations require approval
+- Audit trail: immutable log of all financial data modifications
+
+**Financial Data Integrity**
+- Calculations must be deterministic and reproducible
+- Rounding methodology documented and consistent
+- Period-end controls: prevent backdating across closed periods
+- Reconciliation: automated checks between systems
+
+**IT General Controls**
+- Access management: provisioning, de-provisioning, periodic review
+- Change management: documented, tested, approved deployments
+- Backup and recovery: tested restoration procedures
+- Logical security: password policies, MFA for financial systems
+
+**Code-Level Rules**
+- Financial calculations: use decimal types, document methodology
+- All database changes to financial tables must go through audited functions
+- Soft-delete only for financial records — never hard-delete
+- Configuration changes (tax rates, exchange rates) must be version-controlled
+- Batch jobs: log start, end, record count, error count
+- API inputs affecting financial data: validate and log server-side
+
+Use /learn to add project-specific SOX rules.
+"""))
+
+    if "pci-dss" in compliance:
+        skills.append(("pci-dss-rules", """---
+description: PCI-DSS compliance rules for code review and architecture decisions
+---
+
+**Reference checklist — not legal advice. Verify with your QSA/compliance team.**
+
+**Cardholder Data**
+- Never store full card number after authorization — use tokenization
+- Never store CVV/CVC under any circumstances
+- Mask PAN when displayed: show only first 6 / last 4 digits
+- Encrypt stored cardholder data with AES-256, manage keys securely
+
+**Network Security**
+- Segment cardholder data environment (CDE) from other systems
+- Firewall rules: deny-by-default, document all allowed connections
+- No direct public access to systems storing cardholder data
+
+**Access Control**
+- Unique IDs for all users — no shared accounts
+- MFA for all administrative access to CDE
+- Role-based access: least privilege principle
+- Revoke access immediately on termination
+
+**Code-Level Rules**
+- Never log full card numbers — truncate or tokenize before logging
+- Use payment gateway SDKs — never handle raw card data server-side
+- Input validation: reject malformed card data at entry point
+- Error messages: never expose card data or internal system details
+- Client-side: use hosted payment fields (Stripe Elements, etc.) not raw inputs
+- CSP headers: restrict script sources on payment pages
+- Dependencies: no known vulnerabilities in payment-related packages
+
+**Testing**
+- Penetration test the payment flow quarterly
+- Vulnerability scans: automated, address critical/high within 30 days
+
+Use /learn to add project-specific PCI-DSS rules.
 """))
 
     return skills
@@ -838,6 +1224,111 @@ Rules:
 - NEVER approve code with hardcoded secrets
 - ALWAYS verify auth middleware is applied
 - STOP on any CRITICAL finding — block the PR
+"""))
+
+    # ── Domain auditor agents ──
+    domain = getattr(args, 'domain', 'general')
+    compliance = getattr(args, 'compliance', ['none']) or ['none']
+    has_compliance = compliance != ['none'] and 'none' not in compliance
+
+    # compliance-auditor — when domain is set or compliance requirements exist
+    if domain != "general" or has_compliance:
+        compliance_list = ", ".join(c.upper() for c in compliance if c != "none") if has_compliance else "domain best practices"
+        domain_skills = []
+        if domain != "general":
+            domain_skills.append(f"{domain}-domain-rules")
+        for c in compliance:
+            if c != "none":
+                domain_skills.append(f"{c}-rules")
+        skills_ref = ", ".join(domain_skills) if domain_skills else "domain rules"
+
+        agents.append(("compliance-auditor", f"""---
+name: compliance-auditor
+description: Reviews code against {domain} domain rules and {compliance_list} requirements
+tools: [Read, Glob, Grep]
+model: sonnet
+---
+
+Domain compliance review for {domain} project ({compliance_list}):
+1. Read the domain knowledge skills: {skills_ref}
+2. Scan the code changes against each applicable rule
+3. Check data handling, access control, and audit trail requirements
+4. Verify technical measures match regulatory requirements
+
+Output format per finding:
+- COMPLIANT / NON-COMPLIANT / NEEDS-REVIEW
+- File and line reference
+- Rule citation (which specific requirement)
+- Recommended fix
+
+Rules:
+- ALWAYS read the domain knowledge skills before reviewing
+- NEVER approve code that violates data handling requirements
+- STOP on any non-compliant finding that affects user data or financial integrity
+"""))
+
+    # frontend-auditor — when frontend exists and domain is not general
+    if fe != "none" and domain != "general":
+        fe_domain_checks = {
+            "finance": "decimal precision display, currency formatting, audit trail UI, number input validation",
+            "healthcare": "PHI display masking, consent flows, WCAG AA accessibility, clinical data formatting",
+            "hr": "PII masking in employee views, role-based UI visibility, sensitive field access control",
+            "e-commerce": "price display with tax, card input security (hosted fields), cookie consent, checkout flow",
+            "legal": "document version indicators, redaction UI, privileged content warnings, matter-based navigation",
+            "education": "WCAG AA accessibility, age-appropriate content, progress save/resume, offline support indicators",
+        }
+        checks = fe_domain_checks.get(domain, "domain-appropriate UI patterns")
+
+        agents.append(("frontend-auditor", f"""---
+name: frontend-auditor
+description: Reviews frontend code for {domain}-specific UI/UX requirements
+tools: [Read, Glob, Grep]
+model: sonnet
+---
+
+Frontend review for {domain} {fe} project:
+1. Scan UI components for domain-specific requirements
+2. Check: {checks}
+3. Verify accessibility standards (WCAG 2.1 AA minimum)
+4. Check error states show safe, user-appropriate messages (no data leaks)
+
+Output: PASS / FAIL per component with specific fix.
+
+Rules:
+- NEVER approve UI that exposes sensitive data without masking
+- ALWAYS verify form validation matches backend validation
+- STOP if accessibility violations found — fix before shipping
+"""))
+
+    # architecture-auditor — for regulated domains with strict data requirements
+    if domain in ("finance", "healthcare", "legal"):
+        arch_checks = {
+            "finance": "audit trail completeness, segregation of duties, immutable financial records, backup/retention",
+            "healthcare": "PHI isolation, consent management architecture, break-glass access, data de-identification pipeline",
+            "legal": "matter-based data isolation, legal hold mechanism, privilege tagging, document retention enforcement",
+        }
+        checks = arch_checks.get(domain, "data architecture compliance")
+
+        agents.append(("architecture-auditor", f"""---
+name: architecture-auditor
+description: Reviews architecture for {domain} data handling and regulatory compliance
+tools: [Read, Glob, Grep, Bash]
+model: sonnet
+---
+
+Architecture review for {domain} system:
+1. Verify data flow: where is sensitive data stored, processed, transmitted?
+2. Check: {checks}
+3. Review encryption: at rest (AES-256), in transit (TLS 1.2+)
+4. Verify access control model matches regulatory requirements
+5. Check third-party integrations have appropriate agreements
+
+Output: architecture decision + compliant/non-compliant + risk level.
+
+Rules:
+- NEVER approve architecture that lacks audit trail for sensitive operations
+- ALWAYS verify encryption meets regulatory minimums
+- STOP if data residency or isolation requirements are violated
 """))
 
     return agents
@@ -1549,7 +2040,8 @@ def scaffold(args):
     commands = {
         "status": cmd_status(), "handoff": cmd_handoff(),
         "new-feature": cmd_new_feature(), "fix-bug": cmd_fix_bug(), "audit": cmd_audit(),
-        "build": cmd_build(), "analyze": cmd_analyze(), "learn": cmd_learn(),
+        "build": cmd_build(getattr(args, 'domain', 'general'), getattr(args, 'compliance', ['none'])),
+        "analyze": cmd_analyze(), "learn": cmd_learn(),
         "evolve": cmd_evolve(),
     }
     if args.tdd:
@@ -1733,6 +2225,8 @@ def scaffold(args):
         "frontend": args.frontend, "backend": args.backend,
         "database": args.database, "auth": args.auth or "none",
         "orm": getattr(args, 'orm', 'none') or "none",
+        "domain": getattr(args, 'domain', 'general'),
+        "compliance": getattr(args, 'compliance', ['none']),
         "ai": args.ai, "hosting": args.hosting or "none",
         "git_platform": args.git_platform or "none",
         "ci_cd": getattr(args, 'ci_cd', 'none') or "none",
@@ -1861,6 +2355,8 @@ def main():
     p.add_argument("--auth", choices=["clerk", "nextauth", "supabase-auth", "custom-jwt", "none"], default="none")
     p.add_argument("--hosting", choices=["vercel", "railway", "aws", "fly", "self-hosted", "none"], default="none")
     p.add_argument("--git-platform", choices=["github", "gitlab", "bitbucket", "none"], default="none")
+    p.add_argument("--domain", choices=["finance", "healthcare", "hr", "e-commerce", "legal", "education", "general"], default="general", help="Project domain for domain-specific auditor agents")
+    p.add_argument("--compliance", nargs="*", choices=["gdpr", "sox", "hipaa", "pci-dss", "none"], default=["none"], help="Compliance requirements (multiple allowed)")
     p.add_argument("--ai", action="store_true")
     p.add_argument("--team", action="store_true")
     p.add_argument("--tdd", action="store_true")

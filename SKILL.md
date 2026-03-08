@@ -88,6 +88,25 @@ Capture: `frontend`, `backend`, `database`, `orm`, `auth`, `ai`, `test_cmd`, `li
 
 ---
 
+## Phase 2.5: Domain & Compliance
+
+Only ask if relevant — skip for generic apps. Infer from earlier answers when possible
+(e.g., "accounting dashboard" → finance, "patient portal" → healthcare).
+
+- **What domain is this project in?** finance, healthcare, HR, e-commerce, legal, education, or general
+- **Any compliance requirements?** GDPR, SOX, HIPAA, PCI-DSS, or none
+  Auto-suggest based on domain: finance → SOX, healthcare → HIPAA, e-commerce → PCI-DSS, EU users → GDPR.
+  Multiple selections allowed (e.g., a UK fintech needs GDPR + SOX + PCI-DSS).
+
+When domain ≠ general or compliance is set, the scaffold generates:
+- **Domain auditor agents** — compliance-auditor, frontend-auditor (when frontend exists), architecture-auditor (finance/healthcare/legal)
+- **Domain knowledge skills** — curated rule sets (e.g., `uk-accounting-rules`, `gdpr-rules`) that agents reference during review
+- **Updated /build pipeline** — includes a domain audit step before code review
+
+Capture: `domain`, `compliance`
+
+---
+
 ## Phase 3: Infrastructure
 
 - **Hosting**: Vercel, Railway, AWS, Fly.io, self-hosted, or undecided
@@ -126,6 +145,7 @@ python <skill-path>/scripts/scaffold.py \
   --orm "{orm}" \
   --ci-cd "{ci_cd}" \
   --output-dir "." \
+  [--domain "{domain}"] [--compliance {compliance...}] \
   [--team] [--tdd] [--conventional-commits] [--ai] [--sentry] \
   [--context7] [--sequential-thinking] [--minimal-mcp] \
   [--lint-cmd "{lint_cmd}"] [--test-cmd "{test_cmd}"] \
@@ -247,8 +267,9 @@ The `/build` command runs the full development pipeline with context passing thr
 2. **Security** reviews the blueprint (when auth/payments involved)
 3. **Implement** builds following the blueprint
 4. **Testing** writes tests from the blueprint spec (not implementation)
-5. **Reviewer** checks the full diff
-6. **Push** creates the PR
+5. **Domain Audit** reviews against domain/compliance rules (when domain is set)
+6. **Reviewer** checks the full diff
+7. **Push** creates the PR
 
 Blueprints are the shared context. The template is in `docs/blueprints/.template.md`.
 

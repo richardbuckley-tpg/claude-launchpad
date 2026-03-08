@@ -22,6 +22,12 @@
     "analyze my codebase", "learn from my corrections", "build feature",
     "evolve my config", "update my rules"
   ],
+  "domains": [
+    "finance", "healthcare", "hr", "e-commerce", "legal", "education"
+  ],
+  "compliance": [
+    "gdpr", "sox", "hipaa", "pci-dss"
+  ],
   "capabilities": [
     "scaffold",
     "audit",
@@ -37,7 +43,9 @@
     "analyze",
     "learn",
     "orchestration",
-    "evolve"
+    "evolve",
+    "domain-auditors",
+    "compliance"
   ],
   "stacks": [
     "nextjs", "react-vite", "vue", "sveltekit",

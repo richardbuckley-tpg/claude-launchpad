@@ -91,13 +91,16 @@ your-project/
 ├── CLAUDE.md                        # ≤100 lines, discoverability-first
 ├── ARCHITECTURE.md                  # Design decisions + data flow
 ├── .claude/
-│   ├── agents/                      # 5-6 parameterized agents
+│   ├── agents/                      # 5-9 parameterized agents
 │   │   ├── architect.md
 │   │   ├── testing.md
 │   │   ├── reviewer.md
 │   │   ├── debugger.md
 │   │   ├── push.md
-│   │   └── security.md             # (when auth/AI involved)
+│   │   ├── security.md             # (when auth/AI involved)
+│   │   ├── compliance-auditor.md   # (when domain/compliance set)
+│   │   ├── frontend-auditor.md     # (when domain + frontend)
+│   │   └── architecture-auditor.md # (finance/healthcare/legal)
 │   ├── rules/                       # Path-scoped + project-specific
 │   │   ├── frontend.md              # (globs: src/app/**/*.tsx)
 │   │   ├── backend.md
@@ -115,7 +118,11 @@ your-project/
 │   │   ├── learn.md                 # Record corrections
 │   │   ├── tdd.md                   # (when --tdd)
 │   │   └── pipeline.md             # (when --team)
-│   ├── skills/                      # 8-10 stack-specific skills
+│   ├── skills/                      # 8-10 stack + domain skills
+│   │   ├── ...                      # (stack-specific skills)
+│   │   ├── finance-domain-rules.md  # (when --domain finance)
+│   │   ├── gdpr-rules.md           # (when --compliance gdpr)
+│   │   └── ...domain/compliance     # (curated rule sets)
 │   ├── settings.json                # Hooks + MCP servers
 │   ├── handoff.md                   # Session context preservation
 │   └── launchpad-config.json        # Interview answers + version
@@ -179,6 +186,19 @@ Analyze → Rules → Claude works → Developer corrects → /learn → /evolve
 
 Say **"/evolve"** to re-analyze your codebase with learned corrections merged in. The auditor also detects staleness automatically — if analyzer rules reference deleted files or the analysis is >60 days old, it flags warnings suggesting `/evolve`.
 
+### Domain Auditor Agents
+
+For regulated domains, Launchpad generates specialized auditor agents paired with curated domain knowledge skills:
+
+- **Finance** — UK accounting rules (VAT, MTD, double-entry), SOX internal controls, decimal-only money handling
+- **Healthcare** — HIPAA PHI rules, clinical data integrity, consent management, de-identification
+- **HR** — Employee data handling, payroll rules, GDPR employee rights, recruitment anonymization
+- **E-commerce** — PCI-DSS card handling, pricing rules, consumer rights, inventory management
+- **Legal** — Document retention, client confidentiality, legal hold, privilege tagging
+- **Education** — Student data protection, WCAG accessibility, safeguarding, assessment integrity
+
+Compliance frameworks (GDPR, SOX, HIPAA, PCI-DSS) can be combined — a UK fintech gets GDPR + SOX + PCI-DSS rules. The `/build` pipeline includes a domain audit step before code review. Extend any rule set with `/learn`.
+
 ### Token-Optimized
 
 Strict line limits keep your config lean: CLAUDE.md ≤100 lines, agents ≤30 lines, rules ≤20 lines. After scaffolding, Launchpad shows the estimated token impact on your context window.
@@ -212,6 +232,8 @@ Use `--verify` to run checks after scaffolding: directories exist, settings.json
 **Auth**: Clerk, NextAuth/Auth.js, Supabase Auth, custom JWT
 **Hosting**: Vercel, Railway, AWS, Fly.io, self-hosted
 **CI/CD**: GitHub Actions, GitLab CI
+**Domains**: Finance, Healthcare, HR, E-commerce, Legal, Education
+**Compliance**: GDPR, SOX, HIPAA, PCI-DSS
 **MCP**: GitHub, GitLab, PostgreSQL, SQLite, Filesystem, Sentry, Context7, Sequential Thinking
 
 ## CLI Reference
@@ -222,6 +244,7 @@ python scripts/scaffold.py --project-name "my-app" \
   --frontend nextjs --backend integrated --database postgresql \
   --orm prisma --auth clerk --hosting vercel \
   --git-platform github --ci-cd github-actions \
+  --domain finance --compliance gdpr sox \
   --lint-cmd "npm run lint" --test-cmd "npm run test" \
   --dev-cmd "npm run dev" --build-cmd "npm run build" \
   --migrate-cmd "npx prisma migrate dev" \
@@ -268,7 +291,7 @@ python scripts/audit.py /path/to/project --json        # JSON output
 ## Development
 
 ```bash
-# Run all tests (292 tests, stdlib only)
+# Run all tests (320 tests, stdlib only)
 cd scripts/
 python -m pytest test_scaffold.py test_audit.py test_analyze.py test_learn.py -v
 ```
