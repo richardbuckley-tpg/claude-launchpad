@@ -350,6 +350,62 @@ def check_mcp_servers(project_dir: Path, result: AuditResult):
     result.add_component(f"MCP Servers ({server_count})", server_count * 3, budget_warn=15, budget_fail=30)
 
 
+def check_discoverability(project_dir: Path, result: AuditResult):
+    """Check CLAUDE.md for auto-discoverable content that wastes tokens."""
+    claude_md = project_dir / "CLAUDE.md"
+    if not claude_md.exists():
+        return
+
+    try:
+        content = claude_md.read_text().lower()
+    except UnicodeDecodeError:
+        return
+
+    # Patterns that indicate auto-discoverable content
+    discoverable_patterns = [
+        (r'(?:directory|folder)\s+structure', "directory structure listing (Claude reads the filesystem)"),
+        (r'(?:project|file)\s+(?:layout|tree|structure)\s*[:\n]', "file tree (Claude reads the filesystem)"),
+        (r'```\n(?:├|└|│)', "ASCII tree diagram (Claude reads the filesystem)"),
+        (r'import\s+(?:from|{)', "import patterns (visible in source files)"),
+    ]
+
+    for pattern, reason in discoverable_patterns:
+        if re.search(pattern, content):
+            result.add_issue("warning",
+                f"CLAUDE.md contains {reason}",
+                "Remove auto-discoverable content — it wastes tokens and can reduce task success",
+                category="efficiency")
+            break  # One warning is enough
+
+
+def check_context_percentage(project_dir: Path, result: AuditResult):
+    """Check if total config + MCP context exceeds recommended percentage of 200k window."""
+    settings = project_dir / ".claude" / "settings.json"
+    mcp_count = 0
+    if settings.exists():
+        try:
+            data = json.loads(settings.read_text())
+            mcp_count = len(data.get("mcpServers", {}))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass
+
+    mcp_tokens = mcp_count * 3000
+    config_tokens = result.total_tokens
+    total = config_tokens + mcp_tokens
+    pct = round(total / 200000 * 100, 1)
+
+    if pct > 10:
+        result.add_issue("error",
+            f"Config + MCP uses ~{pct}% of 200k context ({total:,d} tokens)",
+            "Reduce MCP servers or trim config files — aim for <5%",
+            category="efficiency")
+    elif pct > 5:
+        result.add_issue("warning",
+            f"Config + MCP uses ~{pct}% of 200k context ({total:,d} tokens)",
+            "Consider trimming — aim for <5% of context window",
+            category="efficiency")
+
+
 def check_handoff(project_dir: Path, result: AuditResult):
     """Check handoff document exists."""
     handoff = project_dir / ".claude" / "handoff.md"
@@ -388,8 +444,10 @@ def audit(project_dir: Path) -> AuditResult:
     check_mcp_servers(project_dir, result)
     check_skills_content(project_dir, result)
     check_commands_content(project_dir, result)
+    check_discoverability(project_dir, result)
     check_handoff(project_dir, result)
     check_total_budget(result)
+    check_context_percentage(project_dir, result)
 
     result.score = max(0, result.score)
     return result

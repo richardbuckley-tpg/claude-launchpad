@@ -18,16 +18,20 @@ from scaffold import (
     SAFE_CMD_PATTERN,
     PROJECT_NAME_PATTERN,
     MCP_VERSIONS,
+    MCP_CONTEXT_COST,
     VALID_SETTINGS_KEYS,
     get_skills,
     get_mcp_servers,
     get_hooks,
+    get_agents,
+    get_rules,
     get_claudeignore,
     get_env_example,
     get_handoff,
     safe_write,
     merge_settings,
     validate_settings,
+    print_token_summary,
     scaffold,
 )
 
@@ -48,7 +52,15 @@ def make_args(**overrides):
         "conventional_commits": False,
         "lint_cmd": None,
         "test_cmd": None,
+        "dev_cmd": None,
+        "build_cmd": None,
+        "migrate_cmd": None,
+        "orm": "none",
+        "ci_cd": "none",
         "sentry": False,
+        "context7": False,
+        "sequential_thinking": False,
+        "minimal_mcp": False,
         "force": False,
         "update": False,
         "output_dir": ".",
@@ -644,7 +656,7 @@ class TestScaffoldEndToEnd(unittest.TestCase):
         self.assertTrue(config_path.exists())
         data = json.loads(config_path.read_text())
         self.assertEqual(data["project_name"], "test-app")
-        self.assertEqual(data["version"], "4.0.0")
+        self.assertEqual(data["version"], "5.0.0")
         self.assertIn("scaffolded_at", data)
 
 
@@ -773,6 +785,231 @@ class TestManifest(unittest.TestCase):
         scaffold(args)
         project_dir = self.tmpdir / "test-app"
         self.assertFalse(project_dir.exists())
+
+
+class TestGetAgents(unittest.TestCase):
+    """Test agent generation based on interview answers."""
+
+    def test_always_generates_core_agents(self):
+        args = make_args()
+        agents = get_agents(args)
+        names = [a[0] for a in agents]
+        self.assertIn("architect", names)
+        self.assertIn("testing", names)
+        self.assertIn("reviewer", names)
+        self.assertIn("debugger", names)
+        self.assertIn("push", names)
+
+    def test_security_agent_when_auth(self):
+        args = make_args(auth="clerk")
+        agents = get_agents(args)
+        names = [a[0] for a in agents]
+        self.assertIn("security", names)
+
+    def test_no_security_agent_when_no_auth(self):
+        args = make_args(auth="none", ai=False)
+        agents = get_agents(args)
+        names = [a[0] for a in agents]
+        self.assertNotIn("security", names)
+
+    def test_agents_have_yaml_frontmatter(self):
+        args = make_args(auth="clerk")
+        agents = get_agents(args)
+        for name, content in agents:
+            self.assertTrue(content.strip().startswith("---"),
+                          f"Agent '{name}' missing YAML frontmatter")
+
+    def test_agents_include_stack_info(self):
+        args = make_args(frontend="react-vite", backend="python-fastapi")
+        agents = get_agents(args)
+        architect_content = dict(agents)["architect"]
+        self.assertIn("react-vite", architect_content)
+        self.assertIn("python-fastapi", architect_content)
+
+    def test_agents_include_test_cmd(self):
+        args = make_args(test_cmd="pytest -v")
+        agents = get_agents(args)
+        testing_content = dict(agents)["testing"]
+        self.assertIn("pytest -v", testing_content)
+
+    def test_push_agent_respects_conventional_commits(self):
+        args = make_args(conventional_commits=True)
+        agents = get_agents(args)
+        push_content = dict(agents)["push"]
+        self.assertIn("Conventional", push_content)
+
+    def test_agents_have_stop_conditions(self):
+        args = make_args(auth="clerk")
+        agents = get_agents(args)
+        for name, content in agents:
+            self.assertIn("STOP", content,
+                        f"Agent '{name}' should have a STOP condition")
+
+
+class TestGetRules(unittest.TestCase):
+    """Test rule generation based on interview answers."""
+
+    def test_nextjs_generates_frontend_rule(self):
+        args = make_args(frontend="nextjs")
+        rules = get_rules(args)
+        names = [r[0] for r in rules]
+        self.assertIn("frontend", names)
+        content = dict(rules)["frontend"]
+        self.assertIn("Server Components", content)
+
+    def test_react_vite_generates_frontend_rule(self):
+        args = make_args(frontend="react-vite")
+        rules = get_rules(args)
+        names = [r[0] for r in rules]
+        self.assertIn("frontend", names)
+
+    def test_fastapi_generates_backend_rule(self):
+        args = make_args(frontend="none", backend="python-fastapi")
+        rules = get_rules(args)
+        names = [r[0] for r in rules]
+        self.assertIn("backend", names)
+        content = dict(rules)["backend"]
+        self.assertIn("Pydantic", content)
+
+    def test_go_generates_backend_rule(self):
+        args = make_args(frontend="none", backend="go")
+        rules = get_rules(args)
+        names = [r[0] for r in rules]
+        self.assertIn("backend", names)
+        content = dict(rules)["backend"]
+        self.assertIn("Context", content)
+
+    def test_prisma_generates_database_rule(self):
+        args = make_args(database="postgresql", orm="prisma")
+        rules = get_rules(args)
+        names = [r[0] for r in rules]
+        self.assertIn("database", names)
+        content = dict(rules)["database"]
+        self.assertIn("Prisma", content)
+
+    def test_no_db_rule_without_orm(self):
+        args = make_args(database="postgresql", orm="none")
+        rules = get_rules(args)
+        names = [r[0] for r in rules]
+        self.assertNotIn("database", names)
+
+    def test_no_frontend_rule_when_none(self):
+        args = make_args(frontend="none")
+        rules = get_rules(args)
+        names = [r[0] for r in rules]
+        self.assertNotIn("frontend", names)
+
+    def test_rules_have_yaml_frontmatter(self):
+        args = make_args(frontend="nextjs", backend="python-fastapi", orm="prisma")
+        rules = get_rules(args)
+        for name, content in rules:
+            self.assertTrue(content.strip().startswith("---"),
+                          f"Rule '{name}' missing YAML frontmatter")
+
+    def test_rules_have_globs(self):
+        args = make_args(frontend="nextjs")
+        rules = get_rules(args)
+        content = dict(rules)["frontend"]
+        self.assertIn("globs:", content)
+
+
+class TestCommunityMcp(unittest.TestCase):
+    """Test community MCP server support."""
+
+    def test_context7_flag(self):
+        args = make_args(context7=True)
+        servers = get_mcp_servers(args)
+        self.assertIn("context7", servers)
+
+    def test_sequential_thinking_flag(self):
+        args = make_args(sequential_thinking=True)
+        servers = get_mcp_servers(args)
+        self.assertIn("sequential-thinking", servers)
+
+    def test_minimal_mcp_skips_community(self):
+        args = make_args(context7=True, sequential_thinking=True, minimal_mcp=True)
+        servers = get_mcp_servers(args)
+        self.assertNotIn("context7", servers)
+        self.assertNotIn("sequential-thinking", servers)
+
+    def test_minimal_mcp_keeps_essential(self):
+        args = make_args(git_platform="github", minimal_mcp=True)
+        servers = get_mcp_servers(args)
+        self.assertIn("github", servers)
+
+
+class TestNewSafeCmdPatterns(unittest.TestCase):
+    """Test extended SAFE_CMD_PATTERN for new command types."""
+
+    def test_dev_commands(self):
+        allowed = [
+            "uvicorn app.main:app --reload",
+            "uvicorn app.main:app --host 0.0.0.0 --port 8000",
+            "cargo run",
+            "flutter run",
+            "rails server",
+        ]
+        for cmd in allowed:
+            self.assertTrue(SAFE_CMD_PATTERN.match(cmd), f"Should be allowed: {cmd}")
+
+    def test_migration_commands(self):
+        allowed = [
+            "npx prisma migrate dev",
+            "npx prisma migrate deploy",
+            "npx prisma generate",
+            "npx prisma db push",
+            "npx drizzle-kit generate",
+            "npx drizzle-kit migrate",
+            "alembic upgrade head",
+            "alembic downgrade -1",
+        ]
+        for cmd in allowed:
+            self.assertTrue(SAFE_CMD_PATTERN.match(cmd), f"Should be allowed: {cmd}")
+
+    def test_build_commands(self):
+        allowed = ["cargo build", "cargo build --release"]
+        for cmd in allowed:
+            self.assertTrue(SAFE_CMD_PATTERN.match(cmd), f"Should be allowed: {cmd}")
+
+
+class TestScaffoldWithAgentsAndRules(unittest.TestCase):
+    """Test end-to-end scaffold with agents and rules."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_agents_created(self):
+        args = make_args(output_dir=str(self.tmpdir), create_root=True)
+        scaffold(args)
+        agents_dir = self.tmpdir / "test-app" / ".claude" / "agents"
+        self.assertTrue(agents_dir.exists())
+        self.assertTrue((agents_dir / "architect.md").exists())
+        self.assertTrue((agents_dir / "testing.md").exists())
+        self.assertTrue((agents_dir / "push.md").exists())
+
+    def test_rules_created(self):
+        args = make_args(output_dir=str(self.tmpdir), create_root=True, frontend="nextjs")
+        scaffold(args)
+        rules_dir = self.tmpdir / "test-app" / ".claude" / "rules"
+        self.assertTrue(rules_dir.exists())
+        self.assertTrue((rules_dir / "frontend.md").exists())
+
+    def test_metadata_includes_new_fields(self):
+        args = make_args(
+            output_dir=str(self.tmpdir), create_root=True,
+            orm="prisma", ci_cd="github-actions",
+            dev_cmd="npm run dev", build_cmd="npm run build"
+        )
+        scaffold(args)
+        config_path = self.tmpdir / "test-app" / ".claude" / "launchpad-config.json"
+        data = json.loads(config_path.read_text())
+        self.assertEqual(data["orm"], "prisma")
+        self.assertEqual(data["ci_cd"], "github-actions")
+        self.assertEqual(data["dev_cmd"], "npm run dev")
+        self.assertEqual(data["version"], "5.0.0")
 
 
 if __name__ == "__main__":

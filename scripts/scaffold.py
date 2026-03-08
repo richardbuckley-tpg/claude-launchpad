@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-claude-launchpad scaffold script v4.0.0
+claude-launchpad scaffold script v5.0.0
 
 Creates the .claude/ configuration directory with agents, rules, hooks, skills,
 commands, and supporting files — all with real values from the interview.
@@ -25,11 +25,15 @@ PROJECT_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*$')
 SAFE_CMD_PATTERN = re.compile(
     r'^(?:npm|npx|pnpm|yarn|bun) (?:run |exec |dlx )?[a-zA-Z0-9:_-]+(?:\s+(?:--|--[a-zA-Z0-9_-]+(?:=[a-zA-Z0-9_./-]+)?))*$'
     r'|^(?:pytest|ruff|mypy|black|flake8|pylint|isort)(?:\s+[a-zA-Z0-9_./-]+)*(?:\s+(?:--|--[a-zA-Z0-9_-]+(?:=[a-zA-Z0-9_./-]+)?))*$'
-    r'|^(?:go (?:test|vet|fmt)|golangci-lint run)(?:\s+[./a-zA-Z0-9_-]+)*$'
-    r'|^(?:cargo (?:test|clippy|fmt|check))(?:\s+--[a-zA-Z0-9_-]+)*$'
+    r'|^(?:go (?:test|vet|fmt|run [\./a-zA-Z0-9_-]+)|golangci-lint run)(?:\s+[./a-zA-Z0-9_-]+)*$'
+    r'|^(?:cargo (?:test|clippy|fmt|check|run|build))(?:\s+--[a-zA-Z0-9_-]+)*$'
     r'|^(?:bundle exec (?:rubocop|rspec|rails test))(?:\s+[a-zA-Z0-9_./-]+)*$'
-    r'|^(?:rails (?:test|db:migrate))(?:\s+[a-zA-Z0-9_./-]+)*$'
-    r'|^(?:flutter (?:test|analyze|build))(?:\s+[a-zA-Z0-9_./-]+)*$'
+    r'|^(?:rails (?:test|db:migrate|server))(?:\s+[a-zA-Z0-9_./-]+)*$'
+    r'|^(?:flutter (?:test|analyze|build|run))(?:\s+[a-zA-Z0-9_./-]+)*$'
+    r'|^(?:uvicorn\s+[a-zA-Z0-9_.:-]+)(?:\s+--[a-zA-Z0-9_-]+(?:\s+[a-zA-Z0-9_.:-]+)?)*$'
+    r'|^(?:alembic (?:upgrade|downgrade|revision))(?:\s+[a-zA-Z0-9_. "-]+)*$'
+    r'|^(?:npx prisma (?:migrate dev|migrate deploy|generate|db push|db seed|studio))(?:\s+--[a-zA-Z0-9_-]+(?:\s+[a-zA-Z0-9_./-]+)?)*$'
+    r'|^(?:npx drizzle-kit (?:generate|migrate|studio))$'
     r'|^make\s+[a-zA-Z0-9_-]+$'
 )
 
@@ -42,7 +46,12 @@ MCP_VERSIONS = {
     "server-sqlite": "@modelcontextprotocol/server-sqlite@2025.1.1",
     "server-filesystem": "@modelcontextprotocol/server-filesystem@2025.1.1",
     "server-sentry": "@modelcontextprotocol/server-sentry@2025.1.1",
+    "context7": "context7-mcp@1.0.6",
+    "sequential-thinking": "@anthropic/sequential-thinking-mcp@1.0.0",
 }
+
+# Estimated tokens per MCP server in context window (tool descriptions + overhead)
+MCP_CONTEXT_COST = 3000  # ~3,000 tokens per active MCP server
 
 # Valid top-level keys in settings.json
 VALID_SETTINGS_KEYS = {"hooks", "mcpServers", "permissions", "env", "model", "apiKey"}
@@ -417,6 +426,23 @@ def get_mcp_servers(args):
             "env": {"SENTRY_AUTH_TOKEN": "${SENTRY_AUTH_TOKEN}"}
         }
 
+    # Community MCP servers (skip in minimal mode)
+    minimal_mcp = getattr(args, 'minimal_mcp', False)
+    if not minimal_mcp:
+        # Context7 — docs lookup for any stack (high value, low cost)
+        if getattr(args, 'context7', False):
+            servers["context7"] = {
+                "command": "npx",
+                "args": ["-y", MCP_VERSIONS["context7"]]
+            }
+
+        # Sequential Thinking — for complex architectural decisions
+        if getattr(args, 'sequential_thinking', False):
+            servers["sequential-thinking"] = {
+                "command": "npx",
+                "args": ["-y", MCP_VERSIONS["sequential-thinking"]]
+            }
+
     return servers
 
 
@@ -514,6 +540,328 @@ def get_hooks(args):
     }]
 
     return hooks
+
+
+# ── Agents ───────────────────────────────────────────────────────────────
+
+def get_agents(args):
+    """Return list of (name, content) tuples for agent files based on interview answers."""
+    agents = []
+    fe = args.frontend
+    be = args.backend
+    db = args.database
+    test_cmd = getattr(args, 'test_cmd', None) or "npm run test"
+    lint_cmd = getattr(args, 'lint_cmd', None) or "npm run lint"
+    build_cmd = getattr(args, 'build_cmd', None) or "npm run build"
+
+    # architect — always
+    agents.append(("architect", f"""---
+name: architect
+description: Designs technical solutions from feature requests
+tools: [Read, Glob, Grep, Bash, Write]
+model: opus
+---
+
+You are the principal architect for a {fe}/{be} project.
+1. Read CLAUDE.md and ARCHITECTURE.md for current patterns
+2. Assess which system parts this touches
+3. Design: data model changes, API contract, components affected
+4. Write blueprint to docs/blueprints/{{feature}}.md
+5. Present trade-offs for non-obvious decisions
+
+Rules:
+- Prefer extending existing patterns over new ones
+- Keep solutions simple — complexity must be justified
+- Do NOT write code — produce blueprints only
+- STOP if the feature contradicts ARCHITECTURE.md — flag the conflict
+"""))
+
+    # testing — always
+    agents.append(("testing", f"""---
+name: testing
+description: Creates comprehensive test suites
+isolation: worktree
+tools: [Bash, Read, Write, Edit, Grep, Glob]
+model: sonnet
+---
+
+You are a test engineer for a {fe}/{be}/{db} stack.
+Test command: `{test_cmd}`
+
+1. Read the spec/blueprint — do NOT read implementation first
+2. Design: happy path, edge cases, error conditions, security
+3. Write: unit (mock externals), integration (real DB), E2E (user flows)
+4. Run `{test_cmd}` and verify tests pass
+
+Rules:
+- NEVER read implementation before writing tests
+- Test behavior, not internals
+- Each test independent — no shared mutable state
+- STOP if tests require >5 external service mocks — simplify the design
+"""))
+
+    # reviewer — always
+    agents.append(("reviewer", f"""---
+name: reviewer
+description: Reviews code for correctness, performance, and maintainability
+tools: [Read, Glob, Grep, Bash]
+model: sonnet
+---
+
+You review {fe}/{be} code. Lint: `{lint_cmd}`, Test: `{test_cmd}`
+
+Check:
+1. Correctness: Works? Edge cases? Error handling?
+2. Architecture: Fits patterns? Scope right? Simpler alternative?
+3. Performance: N+1 queries? Expensive loops? Pagination?
+4. Tests: Exist? Cover error paths?
+
+Output: APPROVE or REQUEST_CHANGES with Must Fix / Should Fix / Nice to Have.
+
+Rules:
+- Read the FULL diff before starting
+- Explain WHY, suggest the fix
+- STOP and escalate if you find a security vulnerability
+"""))
+
+    # debugger — always
+    agents.append(("debugger", f"""---
+name: debugger
+description: Systematically diagnoses and fixes bugs
+tools: [Bash, Read, Write, Edit, Grep, Glob]
+model: sonnet
+---
+
+Debug methodology for {fe}/{be}/{db} stack:
+1. Reproduce: trigger the bug
+2. Isolate: trace data flow, find the break boundary
+3. Diagnose: root cause (don't guess)
+4. Fix: minimal fix for root cause
+5. Verify: regression test + `{test_cmd}`
+
+Rules:
+- NEVER guess at fixes without understanding root cause
+- ALWAYS reproduce before fixing
+- ALWAYS write a regression test
+- STOP if you can't find root cause after investigation — document and escalate
+"""))
+
+    # push — always
+    cc_rule = "Conventional format: type(scope): description" if args.conventional_commits else "Clear, descriptive messages"
+    agents.append(("push", f"""---
+name: push
+description: Manages git workflow — branches, commits, and PRs
+tools: [Bash, Read, Grep, Glob]
+model: sonnet
+---
+
+Git lifecycle for this project:
+1. Branch: feature/{{desc}}, fix/{{desc}}, chore/{{desc}}
+2. Stage: review `git diff` first. Stage specific files.
+3. Commit: {cc_rule}
+4. Push: `git push -u origin {{branch}}`
+5. PR: `gh pr create` with summary, changes, test checklist
+
+Rules:
+- NEVER force push to main/master
+- NEVER push directly to main — use PRs
+- NEVER commit secrets or .env files
+- STOP if PR >500 lines — suggest splitting
+"""))
+
+    # security — when auth/payments/user-data
+    auth = getattr(args, 'auth', 'none') or 'none'
+    if auth != "none" or args.ai:
+        agents.append(("security", f"""---
+name: security
+description: Reviews code and architecture for vulnerabilities
+tools: [Read, Glob, Grep, Bash]
+model: sonnet
+---
+
+Security review for {fe}/{be} with auth={auth}:
+1. Auth: All endpoints protected? Token handling sound?
+2. Data: PII handled? API responses not over-exposing?
+3. Input: All user input validated? XSS protection?
+4. Infra: No hardcoded secrets? CORS restrictive? Rate limits?
+5. Deps: Run audit command, check for known vulnerabilities
+
+Output: CRITICAL/HIGH/MEDIUM/LOW with location, risk, fix.
+
+Rules:
+- NEVER approve code with hardcoded secrets
+- ALWAYS verify auth middleware is applied
+- STOP on any CRITICAL finding — block the PR
+"""))
+
+    return agents
+
+
+# ── Rules ────────────────────────────────────────────────────────────────
+
+def get_rules(args):
+    """Return list of (name, content) tuples for path-scoped rule files."""
+    rules = []
+    fe = args.frontend
+    be = args.backend
+    db = args.database
+    orm = getattr(args, 'orm', 'none') or 'none'
+
+    # Frontend rules
+    if fe == "nextjs":
+        rules.append(("frontend", """---
+globs: ["src/app/**/*.ts", "src/app/**/*.tsx", "src/components/**/*.tsx"]
+description: Next.js App Router conventions
+---
+
+- Server Components by default. Only add "use client" when needed (hooks, browser APIs, interactivity).
+- Server Actions for mutations — must start with "use server", validate input with zod.
+- Every route group needs loading.tsx + error.tsx + not-found.tsx.
+- Use next/image for images, next/link for navigation.
+- No secrets without NEXT_PUBLIC_ prefix in client code.
+"""))
+    elif fe == "react-vite":
+        rules.append(("frontend", """---
+globs: ["src/components/**/*.tsx", "src/pages/**/*.tsx", "src/hooks/**/*.ts"]
+description: React + Vite conventions
+---
+
+- Feature-based component organization.
+- React Query for server state, Zustand for app state only.
+- API calls through src/lib/api.ts — never directly in components.
+- Lazy-load route components.
+- Handle loading/error states for all async operations.
+"""))
+    elif fe == "vue":
+        rules.append(("frontend", """---
+globs: ["app/components/**/*.vue", "app/pages/**/*.vue", "app/composables/**/*.ts"]
+description: Vue 3 / Nuxt 3 conventions
+---
+
+- Composition API with <script setup> exclusively. No Options API.
+- Composables prefixed with `use`. Pinia for global state.
+- useFetch/useAsyncData for data fetching.
+- Never mutate props directly. Use ref() for primitives.
+"""))
+    elif fe == "sveltekit":
+        rules.append(("frontend", """---
+globs: ["src/routes/**/*.svelte", "src/routes/**/*.ts", "src/lib/**/*.ts"]
+description: SvelteKit conventions
+---
+
+- +page.server.ts for server data loading. Form actions for mutations.
+- $lib alias for imports. Svelte 5 runes ($state, $derived, $effect).
+- Never import $lib/server in client code.
+- Always add +error.svelte for route error handling.
+"""))
+
+    # Backend rules
+    if be == "node-express" or be == "node-fastify":
+        framework = "Express" if be == "node-express" else "Fastify"
+        rules.append(("backend", f"""---
+globs: ["src/routes/**/*.ts", "src/controllers/**/*.ts", "src/services/**/*.ts"]
+description: {framework} API conventions
+---
+
+- Controller → Service → Model pattern. No business logic in controllers.
+- Validate ALL input via zod middleware.
+- Centralized error handler — never catch in routes.
+- Structured logging (pino). No console.log.
+- Environment validated at startup.
+"""))
+    elif be == "python-fastapi":
+        rules.append(("backend", """---
+globs: ["app/api/**/*.py", "app/services/**/*.py", "app/models/**/*.py"]
+description: FastAPI conventions
+---
+
+- Async everywhere. Pydantic for all schemas.
+- Depends() for dependency injection.
+- Separate models (DB) from schemas (API).
+- Type hints on everything. Never return ORM models directly.
+- No sync DB operations. No print() — use logging.
+"""))
+    elif be == "python-django":
+        rules.append(("backend", """---
+globs: ["**/views.py", "**/models.py", "**/serializers.py", "**/urls.py"]
+description: Django conventions
+---
+
+- Views → Serializers → Models. Thin views.
+- DRF serializers for validation and response shaping.
+- select_related/prefetch_related to avoid N+1.
+- Custom managers for complex queries.
+- Never modify applied migrations.
+"""))
+    elif be == "go":
+        rules.append(("backend", """---
+globs: ["internal/**/*.go", "cmd/**/*.go", "pkg/**/*.go"]
+description: Go conventions
+---
+
+- Handler → Service → Repository. Interfaces defined by consumer.
+- Context propagation everywhere. Errors wrapped with %w.
+- Never ignore errors. Never use global state.
+- Table-driven tests. Always defer close resources.
+"""))
+    elif be == "rust-actix":
+        rules.append(("backend", """---
+globs: ["src/**/*.rs"]
+description: Rust / Actix-web conventions
+---
+
+- Handler → Service → Repository. Result<T, AppError> everywhere.
+- Never .unwrap() in production code. Propagate errors with ?.
+- Derive macros for serialization (serde). Sqlx for async DB.
+- Always #[derive(Debug)] on custom types.
+"""))
+    elif be == "ruby-rails":
+        rules.append(("backend", """---
+globs: ["app/controllers/**/*.rb", "app/models/**/*.rb", "app/services/**/*.rb"]
+description: Rails conventions
+---
+
+- MVC + service objects for business logic. Thin controllers.
+- Strong params for input. ActiveRecord validations.
+- RESTful routes. includes() to avoid N+1.
+- Never modify applied migrations. Index all foreign keys.
+"""))
+
+    # Database rules
+    if db != "none" and orm != "none":
+        if orm == "prisma":
+            rules.append(("database", """---
+globs: ["prisma/**/*.prisma", "src/db/**/*.ts"]
+description: Prisma ORM conventions
+---
+
+- PascalCase models, camelCase fields. @map/@@map for snake_case DB.
+- Always include createdAt/updatedAt. @@index for common queries.
+- Never edit applied migrations. Run prisma generate after schema changes.
+- Create migrations (not db push) for production.
+"""))
+        elif orm == "drizzle":
+            rules.append(("database", """---
+globs: ["src/db/**/*.ts", "drizzle.config.ts"]
+description: Drizzle ORM conventions
+---
+
+- Schema defined in src/db/schema.ts. Migrations via drizzle-kit.
+- Use drizzle-kit generate for migrations, never manual edits.
+- Type-safe queries with the query builder.
+"""))
+        elif orm == "sqlalchemy":
+            rules.append(("database", """---
+globs: ["app/db/**/*.py", "app/models/**/*.py"]
+description: SQLAlchemy / Alembic conventions
+---
+
+- Async sessions. Alembic for migrations.
+- Never modify applied migrations. Autogenerate revisions.
+- Separate models from schemas. Use relationship() for joins.
+"""))
+
+    return rules
 
 
 # ── Supporting file generators ───────────────────────────────────────────
@@ -708,6 +1056,37 @@ def validate_settings(settings: dict) -> list[str]:
     return warnings
 
 
+def print_token_summary(created_files: list[str], project_dir: Path, mcp_count: int):
+    """Print estimated token impact of generated config."""
+    TOKENS_PER_LINE = 4
+    total_lines = 0
+    components = []
+
+    for rel_path in created_files:
+        fp = project_dir / rel_path
+        if fp.exists() and fp.suffix in ('.md', '.json'):
+            try:
+                lines = sum(1 for line in fp.read_text().splitlines() if line.strip())
+                tokens = lines * TOKENS_PER_LINE
+                total_lines += lines
+                components.append((rel_path, lines, tokens))
+            except (OSError, UnicodeDecodeError):
+                pass
+
+    mcp_tokens = mcp_count * MCP_CONTEXT_COST
+    config_tokens = total_lines * TOKENS_PER_LINE
+    total_tokens = config_tokens + mcp_tokens
+    context_pct = round(total_tokens / 200000 * 100, 1)
+
+    print(f"\n📊 Token Budget Summary")
+    print(f"  Config files:  ~{config_tokens:,d} tokens ({total_lines} lines)")
+    if mcp_count > 0:
+        print(f"  MCP servers:   ~{mcp_tokens:,d} tokens ({mcp_count} servers × ~{MCP_CONTEXT_COST:,d})")
+    print(f"  Total impact:  ~{total_tokens:,d} tokens ({context_pct}% of 200k context)")
+    if context_pct > 5:
+        print(f"  ⚠ Config uses >{context_pct}% of context — consider trimming")
+
+
 def scaffold(args):
     """Main scaffold function."""
     output_dir = Path(args.output_dir).resolve()
@@ -794,7 +1173,41 @@ def scaffold(args):
         msg += f" (skipped {skipped_skills} existing)"
     print(msg)
 
-    # 4. Supporting files
+    # 4. Agents
+    agents_dir = project_dir / ".claude" / "agents"
+    agents = get_agents(args)
+    created_agents, skipped_agents = 0, 0
+    for name, content in agents:
+        fp = agents_dir / f"{name}.md"
+        result = safe_write(fp, content, force, dry_run=dry_run)
+        if result == "skipped":
+            skipped_agents += 1
+        else:
+            created_agents += 1
+            created_files.append(f".claude/agents/{name}.md")
+    msg = f"  Created {created_agents} agents"
+    if skipped_agents:
+        msg += f" (skipped {skipped_agents} existing)"
+    print(msg)
+
+    # 5. Rules
+    rules_dir = project_dir / ".claude" / "rules"
+    rules = get_rules(args)
+    created_rules, skipped_rules = 0, 0
+    for name, content in rules:
+        fp = rules_dir / f"{name}.md"
+        result = safe_write(fp, content, force, dry_run=dry_run)
+        if result == "skipped":
+            skipped_rules += 1
+        else:
+            created_rules += 1
+            created_files.append(f".claude/rules/{name}.md")
+    msg = f"  Created {created_rules} rules"
+    if skipped_rules:
+        msg += f" (skipped {skipped_rules} existing)"
+    print(msg)
+
+    # 6. Supporting files
     support_files = [
         ("claudeignore", ".claudeignore", get_claudeignore(args.frontend, args.backend)),
         ("env.example", ".env.example", get_env_example(args.database, args.auth or "none", args.ai)),
@@ -874,12 +1287,19 @@ def scaffold(args):
         "project_name": args.project_name,
         "frontend": args.frontend, "backend": args.backend,
         "database": args.database, "auth": args.auth or "none",
+        "orm": getattr(args, 'orm', 'none') or "none",
         "ai": args.ai, "hosting": args.hosting or "none",
         "git_platform": args.git_platform or "none",
+        "ci_cd": getattr(args, 'ci_cd', 'none') or "none",
         "team": args.team, "tdd": args.tdd,
         "conventional_commits": args.conventional_commits,
+        "dev_cmd": getattr(args, 'dev_cmd', None),
+        "build_cmd": getattr(args, 'build_cmd', None),
+        "lint_cmd": getattr(args, 'lint_cmd', None),
+        "test_cmd": getattr(args, 'test_cmd', None),
+        "migrate_cmd": getattr(args, 'migrate_cmd', None),
         "scaffolded_at": datetime.now().isoformat(),
-        "version": "4.0.0",
+        "version": "5.0.0",
     }
     config_path = project_dir / ".claude" / "launchpad-config.json"
     if not dry_run:
@@ -898,16 +1318,21 @@ def scaffold(args):
     if created_files and not dry_run:
         manifest_path = project_dir / ".claude" / "launchpad-manifest.json"
         manifest = {
-            "version": "4.0.0",
+            "version": "5.0.0",
             "created_at": datetime.now().isoformat(),
             "files": sorted(created_files),
         }
         manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
 
-    print(f"\nDone! {len(commands)} commands, {len(skills)} skills generated.")
+    print(f"\nDone! {len(commands)} commands, {len(skills)} skills, {len(agents)} agents, {len(rules)} rules generated.")
     if created_files:
         print(f"  {len(created_files)} files created/updated (manifest: .claude/launchpad-manifest.json)")
-    print("Next: Claude generates CLAUDE.md, agents, rules, hooks, ARCHITECTURE.md with real values.")
+
+    # Token budget summary
+    if created_files and not dry_run:
+        print_token_summary(created_files, project_dir, len(mcp_servers))
+
+    print("\nNext: Claude generates CLAUDE.md, ARCHITECTURE.md with real values from the interview.")
     return 0
 
 
@@ -926,7 +1351,15 @@ def main():
     p.add_argument("--conventional-commits", action="store_true")
     p.add_argument("--lint-cmd", default=None, help="Lint command (e.g., 'npm run lint')")
     p.add_argument("--test-cmd", default=None, help="Test command (e.g., 'npm run test')")
+    p.add_argument("--dev-cmd", default=None, help="Dev server command (e.g., 'npm run dev')")
+    p.add_argument("--build-cmd", default=None, help="Build command (e.g., 'npm run build')")
+    p.add_argument("--migrate-cmd", default=None, help="DB migration command (e.g., 'npx prisma migrate dev')")
+    p.add_argument("--orm", choices=["prisma", "drizzle", "sqlalchemy", "mongoose", "typeorm", "sequelize", "activerecord", "none"], default="none", help="ORM/database toolkit")
+    p.add_argument("--ci-cd", choices=["github-actions", "gitlab-ci", "none"], default="none", help="CI/CD platform")
     p.add_argument("--sentry", action="store_true", help="Add Sentry MCP server")
+    p.add_argument("--context7", action="store_true", help="Add Context7 docs MCP server")
+    p.add_argument("--sequential-thinking", action="store_true", dest="sequential_thinking", help="Add Sequential Thinking MCP server")
+    p.add_argument("--minimal-mcp", action="store_true", dest="minimal_mcp", help="Only include essential MCP servers (skip community)")
     p.add_argument("--force", action="store_true", help="Overwrite existing files (default: skip existing)")
     p.add_argument("--update", action="store_true", help="Merge new config into existing files (add missing commands/skills/MCP)")
     p.add_argument("--dry-run", action="store_true", help="Show what would be created without writing any files")

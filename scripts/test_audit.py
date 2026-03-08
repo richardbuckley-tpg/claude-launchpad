@@ -19,6 +19,8 @@ from audit import (
     check_agents,
     check_claude_md,
     check_commands_content,
+    check_context_percentage,
+    check_discoverability,
     check_handoff,
     check_mcp_servers,
     check_rules,
@@ -633,6 +635,66 @@ class TestCategoryScoring(unittest.TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.tmpdir)
+
+
+class TestCheckDiscoverability(unittest.TestCase):
+    """Test CLAUDE.md discoverability checks."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_directory_structure_flagged(self):
+        project_dir = make_project(self.tmpdir, claude_md_content="# Project\n\n## Directory Structure\nsrc/\n  app/\n  lib/\n")
+        r = AuditResult()
+        check_discoverability(project_dir, r)
+        warnings = [i for i in r.issues if "directory structure" in i["message"].lower() or "discoverable" in i.get("fix", "").lower()]
+        self.assertTrue(len(warnings) > 0)
+
+    def test_file_tree_ascii_flagged(self):
+        project_dir = make_project(self.tmpdir, claude_md_content="# Project\n\n```\n├── src/\n│   ├── app/\n│   └── lib/\n```\n")
+        r = AuditResult()
+        check_discoverability(project_dir, r)
+        warnings = [i for i in r.issues if "discoverable" in i.get("fix", "").lower() or "tree" in i.get("message", "").lower()]
+        self.assertTrue(len(warnings) > 0)
+
+    def test_clean_claude_md_no_warning(self):
+        project_dir = make_project(self.tmpdir, claude_md_content="# Project\n\n## Commands\nnpm run dev\nnpm run test\n")
+        r = AuditResult()
+        check_discoverability(project_dir, r)
+        warnings = [i for i in r.issues if "discoverable" in i.get("fix", "").lower()]
+        self.assertEqual(len(warnings), 0)
+
+
+class TestCheckContextPercentage(unittest.TestCase):
+    """Test context window percentage checks."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_many_mcp_servers_warns(self):
+        servers = {f"server{i}": {"command": "npx", "args": []} for i in range(7)}
+        project_dir = make_project(self.tmpdir, settings={"mcpServers": servers})
+        r = AuditResult()
+        r.total_tokens = 2000
+        check_context_percentage(project_dir, r)
+        # 7 servers × 3000 + 2000 = 23000 tokens = 11.5% > 10%
+        issues = [i for i in r.issues if "context" in i["message"].lower()]
+        self.assertTrue(len(issues) > 0)
+
+    def test_minimal_config_no_warning(self):
+        project_dir = make_project(self.tmpdir, settings={"mcpServers": {"gh": {"command": "npx"}}})
+        r = AuditResult()
+        r.total_tokens = 500
+        check_context_percentage(project_dir, r)
+        # 1 server × 3000 + 500 = 3500 tokens = 1.75%
+        issues = [i for i in r.issues if "context" in i["message"].lower()]
+        self.assertEqual(len(issues), 0)
 
 
 if __name__ == "__main__":

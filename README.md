@@ -9,9 +9,13 @@ Lean, token-optimized Claude Code bootstrapper with a built-in Config Auditor.
 | | Launchpad | ECC | Starter Kit |
 |---|---|---|---|
 | **Est. token cost** | ~2,800 | ~7,200 | ~5,100 |
-| **Agents** | 6 (≤30 lines each) | 13 (verbose) | 9 |
+| **Agents** | 5-6 (real, parameterized) | 13 (verbose) | 9 |
+| **Rules** | Path-scoped, stack-specific | Generic | None |
 | **Skills** | 8-10 (stack-specific) | 65+ | 11 |
 | **Config Auditor** | ✓ (unique) | ✗ | ✗ |
+| **Community MCP** | Context7, Sequential Thinking | ✗ | ✗ |
+| **Token budget tracking** | ✓ (context % estimate) | ✗ | ✗ |
+| **Discoverability-first** | ✓ (ETH Zurich research) | ✗ | ✗ |
 | **Fully rendered output** | ✓ (real values) | Partial | Presets |
 
 Three things set Launchpad apart:
@@ -82,10 +86,12 @@ your-project/
 ## Supported Stacks
 
 **Frontend**: Next.js, React+Vite, Vue 3/Nuxt, SvelteKit
-**Backend**: Express, Fastify, FastAPI, Django, Go, integrated (Next.js/SvelteKit)
-**Database**: PostgreSQL (Prisma/Drizzle/SQLAlchemy), MongoDB, Supabase, SQLite
+**Backend**: Express, Fastify, FastAPI, Django, Go, Rust/Actix, Ruby/Rails, integrated (Next.js/SvelteKit)
+**Database**: PostgreSQL, MongoDB, Supabase, SQLite, MySQL, DynamoDB
+**ORM**: Prisma, Drizzle, SQLAlchemy, Mongoose, TypeORM, Sequelize, ActiveRecord
 **Auth**: Clerk, NextAuth/Auth.js, Supabase Auth, custom JWT
 **Hosting**: Vercel, Railway, AWS, Fly.io, self-hosted
+**MCP**: GitHub, GitLab, PostgreSQL, SQLite, Filesystem, Sentry, Context7, Sequential Thinking
 
 ## The Auditor
 
