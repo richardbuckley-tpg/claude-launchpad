@@ -1402,6 +1402,55 @@ class TestDomainBuildPipeline(unittest.TestCase):
         self.assertNotIn("7.", content)
 
 
+class TestTddBuildPipeline(unittest.TestCase):
+    """Test /build command TDD mode reorders test before implement."""
+
+    def test_tdd_tests_before_implement(self):
+        content = cmd_build(tdd=True)
+        test_pos = content.index("Test (TDD)")
+        impl_pos = content.index("Implement")
+        self.assertLess(test_pos, impl_pos, "TDD: tests should come before implement")
+
+    def test_non_tdd_implement_before_test(self):
+        content = cmd_build(tdd=False)
+        impl_pos = content.index("Implement")
+        test_pos = content.index("Test")
+        self.assertLess(impl_pos, test_pos, "Non-TDD: implement should come before test")
+
+    def test_tdd_mentions_failing_tests(self):
+        content = cmd_build(tdd=True)
+        self.assertIn("failing tests", content)
+        self.assertIn("red", content)
+        self.assertIn("green", content)
+
+    def test_tdd_implement_says_until_tests_pass(self):
+        content = cmd_build(tdd=True)
+        self.assertIn("until all tests pass", content)
+
+    def test_non_tdd_no_red_green(self):
+        content = cmd_build(tdd=False)
+        self.assertNotIn("red", content.lower().split("blueprint")[0] if "blueprint" in content.lower() else content)
+
+    def test_tdd_with_domain(self):
+        content = cmd_build(domain="finance", compliance=["sox"], tdd=True)
+        test_pos = content.index("Test (TDD)")
+        impl_pos = content.index("Implement")
+        domain_pos = content.index("Domain Audit")
+        self.assertLess(test_pos, impl_pos)
+        self.assertLess(impl_pos, domain_pos)
+
+    def test_tdd_step_numbering(self):
+        content = cmd_build(tdd=True)
+        # TDD without domain: 7 steps (design, security, test, implement, review, ship)
+        self.assertIn("3.", content)
+        self.assertIn("4.", content)
+
+    def test_tdd_with_domain_step_count(self):
+        content = cmd_build(domain="finance", compliance=["sox"], tdd=True)
+        # With domain: design, security, test, implement, domain-audit, review, ship = 7
+        self.assertIn("7.", content)
+
+
 class TestDomainScaffoldIntegration(unittest.TestCase):
     """Test full scaffold with domain options."""
 

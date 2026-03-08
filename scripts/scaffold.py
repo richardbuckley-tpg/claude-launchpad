@@ -205,20 +205,55 @@ Pipeline:
 6. **Push**: Branch, commit, PR (use push agent)
 """
 
-def cmd_build(domain="general", compliance=None):
+def cmd_build(domain="general", compliance=None, tdd=False):
     has_domain = domain != "general"
     has_compliance = compliance and compliance != ['none'] and 'none' not in compliance
 
+    # Build the numbered steps dynamically
+    step = 3  # steps 1 (design) and 2 (security) are always first
+
+    if tdd:
+        test_step = f"""{step}. **Test (TDD)**: Run `@testing Write failing tests for "$ARGUMENTS"`
+   - Tests are derived from the blueprint spec — define expected behavior BEFORE implementation
+   - Run tests to confirm they fail (red) — this validates the tests are meaningful
+   - Tests define the contract: function signatures, API responses, data shapes
+"""
+        step += 1
+        impl_step = f"""{step}. **Implement**: Build until all tests pass (green)
+   - Read the blueprint AND the failing tests — both are your spec
+   - Follow existing patterns (check `.claude/rules/`)
+   - Run tests after each major piece — stay in the red→green loop
+   - Once green, refactor if needed (tests protect you)
+"""
+        step += 1
+    else:
+        impl_step = f"""{step}. **Implement**: Build following the approved blueprint
+   - Read the blueprint first — it's the spec
+   - Follow existing patterns (check `.claude/rules/`)
+   - Create all layers: data model, API, UI, types
+"""
+        step += 1
+        test_step = f"""{step}. **Test**: Run `@testing Write tests for "$ARGUMENTS"`
+   - Tests are based on the blueprint, not the implementation
+   - Must pass before continuing
+"""
+        step += 1
+
     domain_step = ""
     if has_domain or has_compliance:
-        domain_step = """
-5. **Domain Audit**: Run `@compliance-auditor Audit "$ARGUMENTS" for domain compliance`
+        domain_step = f"""{step}. **Domain Audit**: Run `@compliance-auditor Audit "$ARGUMENTS" for domain compliance`
    - Must PASS before review — non-compliant findings block the PR
    - Read domain knowledge skills for applicable rules
 """
-        review_num, ship_num = "6", "7"
+        step += 1
+
+    review_num = step
+    ship_num = step + 1
+
+    if tdd:
+        build_test_steps = f"{test_step}\n{impl_step}"
     else:
-        review_num, ship_num = "5", "6"
+        build_test_steps = f"{impl_step}\n{test_step}"
 
     return f"""---
 description: Full feature pipeline — design, build, test, review, ship
@@ -234,14 +269,7 @@ Execute the full development pipeline with context passing through blueprints:
 
 2. **Security** (if auth/payments involved): Run `@security Review the blueprint`
 
-3. **Implement**: Build following the approved blueprint
-   - Read the blueprint first — it's the spec
-   - Follow existing patterns (check `.claude/rules/`)
-   - Create all layers: data model, API, UI, types
-
-4. **Test**: Run `@testing Write tests for "$ARGUMENTS"`
-   - Tests are based on the blueprint, not the implementation
-   - Must pass before continuing
+{build_test_steps}
 {domain_step}
 {review_num}. **Review**: Run `@reviewer Review all changes`
    - Must APPROVE before shipping
@@ -2040,7 +2068,7 @@ def scaffold(args):
     commands = {
         "status": cmd_status(), "handoff": cmd_handoff(),
         "new-feature": cmd_new_feature(), "fix-bug": cmd_fix_bug(), "audit": cmd_audit(),
-        "build": cmd_build(getattr(args, 'domain', 'general'), getattr(args, 'compliance', ['none'])),
+        "build": cmd_build(getattr(args, 'domain', 'general'), getattr(args, 'compliance', ['none']), args.tdd),
         "analyze": cmd_analyze(), "learn": cmd_learn(),
         "evolve": cmd_evolve(),
     }
