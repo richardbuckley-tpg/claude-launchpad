@@ -20,6 +20,7 @@ from audit import (
     check_context_percentage,
     check_dependency_drift,
     check_discoverability,
+    check_event_system_config,
     check_handoff,
     check_mcp_servers,
     check_rules,
@@ -929,6 +930,149 @@ class TestCheckDependencyDrift(unittest.TestCase):
         drift_issues = [i for i in r.issues if "next" in i.get("message", "").lower()]
         self.assertTrue(len(drift_issues) > 0)
         self.assertIn("framework", drift_issues[0]["message"].lower())
+
+
+class TestEventSystemAudit(unittest.TestCase):
+    """Test event system configuration auditing."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_warns_missing_event_consumer_rule(self):
+        project_dir = make_project(self.tmpdir, rules={
+            "frontend": "---\nglobs: [\"*.ts\"]\n---\nRules here"
+        })
+        claude_dir = project_dir / ".claude"
+        (claude_dir / "launchpad-config.json").write_text(json.dumps({
+            "event_systems": ["kafka", "bullmq"]
+        }))
+        r = AuditResult()
+        check_event_system_config(project_dir, r)
+        messages = [i["message"] for i in r.issues]
+        self.assertTrue(any("event-consumers" in m for m in messages))
+
+    def test_no_warning_with_event_consumer_rule(self):
+        project_dir = make_project(self.tmpdir, rules={
+            "event-consumers": "---\nglobs: [\"*.ts\"]\n---\nConsumer rules"
+        })
+        claude_dir = project_dir / ".claude"
+        (claude_dir / "launchpad-config.json").write_text(json.dumps({
+            "event_systems": ["kafka"]
+        }))
+        r = AuditResult()
+        check_event_system_config(project_dir, r)
+        messages = [i["message"] for i in r.issues]
+        self.assertFalse(any("event-consumers" in m for m in messages))
+
+    def test_warns_missing_technology_specific_rule(self):
+        project_dir = make_project(self.tmpdir, rules={
+            "event-consumers": "---\nglobs: [\"*.ts\"]\n---\nGeneric consumer rules"
+        })
+        claude_dir = project_dir / ".claude"
+        (claude_dir / "launchpad-config.json").write_text(json.dumps({
+            "event_systems": ["kafka"]
+        }))
+        r = AuditResult()
+        check_event_system_config(project_dir, r)
+        messages = [i["message"] for i in r.issues]
+        self.assertTrue(any("kafka" in m.lower() for m in messages))
+
+    def test_warns_missing_reliability_auditor(self):
+        project_dir = make_project(self.tmpdir, rules={
+            "event-consumers": "---\nglobs: [\"*.ts\"]\n---\nRules"
+        }, agents={
+            "architect": "---\nname: architect\n---\nAgent"
+        })
+        claude_dir = project_dir / ".claude"
+        (claude_dir / "launchpad-config.json").write_text(json.dumps({
+            "event_systems": ["kafka"]
+        }))
+        r = AuditResult()
+        check_event_system_config(project_dir, r)
+        messages = [i["message"] for i in r.issues]
+        self.assertTrue(any("reliability-auditor" in m for m in messages))
+
+    def test_no_warning_with_reliability_auditor(self):
+        project_dir = make_project(self.tmpdir, rules={
+            "event-consumers": "---\nglobs: [\"*.ts\"]\n---\nRules",
+            "kafka": "---\nglobs: [\"*.ts\"]\n---\nKafka rules",
+        }, agents={
+            "reliability-auditor": "---\nname: reliability-auditor\n---\nAgent"
+        })
+        claude_dir = project_dir / ".claude"
+        (claude_dir / "launchpad-config.json").write_text(json.dumps({
+            "event_systems": ["kafka"]
+        }))
+        r = AuditResult()
+        check_event_system_config(project_dir, r)
+        messages = [i["message"] for i in r.issues]
+        self.assertFalse(any("reliability-auditor" in m for m in messages))
+
+    def test_temporal_specific_warning(self):
+        project_dir = make_project(self.tmpdir, rules={
+            "event-consumers": "---\nglobs: [\"*.ts\"]\n---\nRules"
+        })
+        claude_dir = project_dir / ".claude"
+        (claude_dir / "launchpad-config.json").write_text(json.dumps({
+            "event_systems": ["temporal"]
+        }))
+        r = AuditResult()
+        check_event_system_config(project_dir, r)
+        messages = [i["message"] for i in r.issues]
+        self.assertTrue(any("temporal" in m.lower() and "determinism" in m.lower() for m in messages))
+
+    def test_no_event_check_without_config(self):
+        project_dir = make_project(self.tmpdir)
+        r = AuditResult()
+        check_event_system_config(project_dir, r)
+        self.assertEqual(len(r.issues), 0)
+
+    def test_no_event_check_without_event_systems(self):
+        project_dir = make_project(self.tmpdir)
+        claude_dir = project_dir / ".claude"
+        (claude_dir / "launchpad-config.json").write_text(json.dumps({
+            "project_name": "test-app"
+        }))
+        r = AuditResult()
+        check_event_system_config(project_dir, r)
+        self.assertEqual(len(r.issues), 0)
+
+    def test_event_drift_detection(self):
+        """Adding an event package should trigger drift warning."""
+        project_dir = make_project(self.tmpdir)
+        claude_dir = project_dir / ".claude"
+        (claude_dir / "launchpad-config.json").write_text(json.dumps({
+            "version": "6.0.0",
+            "dependency_snapshot": {
+                "node": {"express": "4.0.0"}
+            }
+        }))
+        (project_dir / "package.json").write_text(json.dumps({
+            "dependencies": {"express": "4.0.0", "kafkajs": "2.0.0"},
+            "devDependencies": {}
+        }))
+        r = AuditResult()
+        check_dependency_drift(project_dir, r)
+        drift_issues = [i for i in r.issues if "kafkajs" in i.get("message", "").lower()]
+        self.assertTrue(len(drift_issues) > 0)
+        self.assertIn("event", drift_issues[0]["message"].lower())
+
+    def test_event_check_wired_into_audit(self):
+        """Verify check_event_system_config is called during audit()."""
+        project_dir = make_project(self.tmpdir, rules={
+            "frontend": "---\nglobs: [\"*.ts\"]\n---\nRules"
+        })
+        claude_dir = project_dir / ".claude"
+        (claude_dir / "launchpad-config.json").write_text(json.dumps({
+            "event_systems": ["kafka"]
+        }))
+        result = audit(project_dir)
+        messages = [i["message"] for i in result.issues]
+        # Should have event-related warnings from the audit pipeline
+        self.assertTrue(any("event" in m.lower() for m in messages))
 
 
 if __name__ == "__main__":

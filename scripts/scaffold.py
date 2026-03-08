@@ -1254,6 +1254,46 @@ Rules:
 - STOP on any CRITICAL finding — block the PR
 """))
 
+    # reliability-auditor — when event systems detected
+    event_systems = getattr(args, 'event_systems', []) or []
+    if event_systems:
+        systems_str = ", ".join(event_systems)
+        event_checks = []
+        if "kafka" in event_systems:
+            event_checks.append("Kafka: acks=all? Consumer group IDs meaningful? DLTs configured? Schema Registry backward-compat?")
+        if "bullmq" in event_systems:
+            event_checks.append("BullMQ: workers in separate processes? Concurrency limited? Stalled job handling?")
+        if "rabbitmq" in event_systems:
+            event_checks.append("RabbitMQ: prefetch configured? Queues durable? Messages persistent? DLX on every queue?")
+        if "celery" in event_systems:
+            event_checks.append("Celery: task_acks_late? JSON serializer? Time limits set? No ORM objects as args?")
+        if "temporal" in event_systems:
+            event_checks.append("Temporal: workflow code deterministic? No I/O in workflows? Activities handle all side effects?")
+        checks_str = "\n".join(f"   - {c}" for c in event_checks) if event_checks else "   - Technology-specific best practices"
+
+        agents.append(("reliability-auditor", f"""---
+name: reliability-auditor
+description: Reviews event-driven code for reliability, idempotency, and failure handling
+tools: [Read, Glob, Grep, Bash]
+model: sonnet
+---
+
+Reliability review for event-driven system ({systems_str}):
+1. Idempotency: every consumer/worker handles duplicate messages?
+2. DLQ: failed messages routed to dead letter queue, never silently dropped?
+3. Retry: exponential backoff with max attempts? Poison messages handled?
+4. Schema: events validated before publish? Backward-compatible changes?
+5. Technology-specific:
+{checks_str}
+
+Output: RELIABLE / NEEDS-WORK per consumer with specific fix.
+
+Rules:
+- NEVER approve consumers without idempotency checks
+- NEVER approve queues without dead letter configuration
+- STOP if messages can be silently lost — this is a data loss risk
+"""))
+
     # ── Domain auditor agents ──
     domain = getattr(args, 'domain', 'general')
     compliance = getattr(args, 'compliance', ['none']) or ['none']
@@ -1524,6 +1564,97 @@ description: SQLAlchemy / Alembic conventions
 - Async sessions. Alembic for migrations.
 - Never modify applied migrations. Autogenerate revisions.
 - Separate models from schemas. Use relationship() for joins.
+"""))
+
+    # Event system rules
+    event_systems = getattr(args, 'event_systems', []) or []
+    event_patterns = getattr(args, 'event_patterns', []) or []
+    schema_format = getattr(args, 'schema_format', 'none') or 'none'
+    workflow_orch = getattr(args, 'workflow_orchestration', 'none') or 'none'
+
+    if event_systems:
+        # Determine target globs based on backend
+        if be in ("python-fastapi", "python-django"):
+            event_globs = '["**/consumers/**/*.py", "**/producers/**/*.py", "**/workers/**/*.py", "**/tasks/**/*.py", "**/handlers/**/*.py"]'
+        elif be == "go":
+            event_globs = '["**/consumers/**/*.go", "**/producers/**/*.go", "**/handlers/**/*.go", "**/workers/**/*.go"]'
+        elif be in ("rust-actix",):
+            event_globs = '["**/consumers/**/*.rs", "**/producers/**/*.rs", "**/handlers/**/*.rs", "**/workers/**/*.rs"]'
+        elif be in ("node-express", "node-fastify") or fe in ("nextjs", "sveltekit"):
+            event_globs = '["**/consumers/**/*.ts", "**/producers/**/*.ts", "**/workers/**/*.ts", "**/handlers/**/*.ts", "**/jobs/**/*.ts", "**/queues/**/*.ts"]'
+        else:
+            event_globs = '["**/consumers/**", "**/producers/**", "**/workers/**", "**/handlers/**"]'
+
+        systems_str = ", ".join(event_systems)
+        lines = [f"- Event systems: {systems_str}"]
+        lines.append("- ALL consumers/workers MUST be idempotent — at-least-once delivery is the norm")
+        lines.append("- Configure dead letter queues on every consumer — never silently drop messages")
+        lines.append("- Keep event payloads small — store data externally, pass references/IDs")
+        lines.append("- Retry with exponential backoff and max attempts before DLQ")
+
+        if "kafka" in event_systems:
+            lines.append("- Kafka: use acks=all, disable auto topic creation in production, meaningful consumer group IDs")
+        if "bullmq" in event_systems:
+            lines.append("- BullMQ: run workers in separate processes from API, set concurrency limits")
+        if "rabbitmq" in event_systems:
+            lines.append("- RabbitMQ: one TCP connection per process, configure prefetch, durable queues + persistent messages")
+        if "celery" in event_systems:
+            lines.append("- Celery: task_acks_late=True, never pass ORM objects as arguments, use JSON serializer (not pickle)")
+        if "nats" in event_systems:
+            lines.append("- NATS: distinguish Core (at-most-once) from JetStream (at-least-once), subject hierarchies mirror domain")
+
+        if schema_format != "none":
+            lines.append(f"- Schema format: {schema_format} — enforce backward compatibility, test in CI")
+
+        rules.append(("event-consumers", f"""---
+globs: {event_globs}
+description: Event-driven system conventions ({systems_str})
+---
+
+{chr(10).join(lines)}
+"""))
+
+    if workflow_orch == "temporal":
+        if be in ("python-fastapi", "python-django"):
+            temporal_globs = '["**/workflows/**/*.py", "**/activities/**/*.py"]'
+        elif be == "go":
+            temporal_globs = '["**/workflows/**/*.go", "**/activities/**/*.go"]'
+        elif be in ("node-express", "node-fastify") or fe in ("nextjs", "sveltekit"):
+            temporal_globs = '["**/workflows/**/*.ts", "**/activities/**/*.ts"]'
+        else:
+            temporal_globs = '["**/workflows/**", "**/activities/**"]'
+
+        rules.append(("temporal", f"""---
+globs: {temporal_globs}
+description: Temporal workflow conventions
+---
+
+- Workflow code MUST be deterministic — NO I/O, Date.now(), Math.random(), network calls, file access, DB queries
+- ALL side effects go in activities — workflows only orchestrate
+- One file per workflow, one file per activity group
+- Use workflow versioning when changing existing workflow code (prevents non-determinism on replay)
+- Use continue-as-new for long-running workflows (prevents unbounded history)
+- Never set maximum retry limits on activities — use appropriate timeouts instead
+"""))
+
+    if event_patterns:
+        pattern_lines = []
+        if "event-sourcing" in event_patterns:
+            pattern_lines.append("- Event Sourcing: events are immutable once written, use snapshots for long histories, schema versioning required")
+        if "cqrs" in event_patterns:
+            pattern_lines.append("- CQRS: separate write model (commands) from read model (queries), projections must be idempotent and rebuildable")
+        if "saga" in event_patterns:
+            pattern_lines.append("- Saga: every step MUST have a compensating transaction, compensations must be idempotent")
+        if "outbox" in event_patterns:
+            pattern_lines.append("- Outbox: write to outbox in SAME database transaction as state change, separate publisher reads outbox")
+
+        if pattern_lines:
+            rules.append(("event-patterns", f"""---
+globs: ["**/events/**", "**/sagas/**", "**/projections/**", "**/commands/**", "**/queries/**"]
+description: Event-driven architectural patterns
+---
+
+{chr(10).join(pattern_lines)}
 """))
 
     # Monorepo rule
@@ -2268,6 +2399,10 @@ def scaffold(args):
         "orm": getattr(args, 'orm', 'none') or "none",
         "domain": getattr(args, 'domain', 'general'),
         "compliance": getattr(args, 'compliance', ['none']),
+        "event_systems": getattr(args, 'event_systems', []) or [],
+        "event_patterns": getattr(args, 'event_patterns', []) or [],
+        "schema_format": getattr(args, 'schema_format', 'none'),
+        "workflow_orchestration": getattr(args, 'workflow_orchestration', 'none'),
         "ai": args.ai, "hosting": args.hosting or "none",
         "git_platform": args.git_platform or "none",
         "ci_cd": getattr(args, 'ci_cd', 'none') or "none",
@@ -2439,6 +2574,10 @@ def main():
     p.add_argument("--analyze", action="store_true", help="Analyze existing codebase to generate project-specific rules")
     p.add_argument("--monorepo", action="store_true", help="Enable monorepo conventions rule")
     p.add_argument("--migrate-ai-configs", action="store_true", dest="migrate_ai_configs", help="Detect and migrate other AI tool configs (.cursorrules, copilot, etc.)")
+    p.add_argument("--event-systems", nargs="*", default=[], help="Event systems (kafka, bullmq, rabbitmq, celery, temporal, nats, aws-events, flink, spark-streaming)")
+    p.add_argument("--event-patterns", nargs="*", default=[], help="Event patterns (event-sourcing, cqrs, saga, outbox)")
+    p.add_argument("--schema-format", choices=["avro", "protobuf", "json-schema", "none"], default="none", help="Event schema format")
+    p.add_argument("--workflow-orchestration", choices=["temporal", "none"], default="none", help="Workflow orchestration platform")
     p.add_argument("--output-dir", default=".")
     p.add_argument("--create-root", action="store_true")
     args = p.parse_args()
@@ -2495,12 +2634,20 @@ def main():
                     "hosting": "hosting", "test_cmd": "test_cmd",
                     "lint_cmd": "lint_cmd", "dev_cmd": "dev_cmd",
                     "build_cmd": "build_cmd", "migrate_cmd": "migrate_cmd",
+                    "schema_format": "schema_format",
+                    "workflow_orchestration": "workflow_orchestration",
                 }
                 for stack_key, arg_key in stack_to_args.items():
                     detected = analysis.stack.get(stack_key)
                     if detected and getattr(args, arg_key, None) in (None, "none"):
                         setattr(args, arg_key, detected)
                         print(f"  Detected {arg_key}: {detected}")
+                # Handle list values from analyzer
+                for list_key in ("event_systems", "event_patterns"):
+                    detected = analysis.stack.get(list_key)
+                    if detected and not getattr(args, list_key, []):
+                        setattr(args, list_key, detected)
+                        print(f"  Detected {list_key}: {', '.join(detected)}")
                 # Enable monorepo flag if analysis detected a monorepo
                 monorepo_info = analysis.stack.get("monorepo")
                 if monorepo_info:

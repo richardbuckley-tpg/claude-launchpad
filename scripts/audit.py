@@ -457,6 +457,14 @@ SIGNIFICANT_PACKAGES = {
     "orm": ["prisma", "@prisma/client", "drizzle-orm", "typeorm", "sequelize", "mongoose", "sqlalchemy"],
     "auth": ["@clerk/nextjs", "@clerk/express", "next-auth", "@auth/core", "@supabase/supabase-js"],
     "framework": ["next", "express", "fastify", "react", "vue", "svelte", "@sveltejs/kit", "fastapi", "django", "flask"],
+    "event": [
+        "kafkajs", "node-rdkafka", "bullmq", "bull", "amqplib",
+        "amqp-connection-manager", "@temporalio/client", "@temporalio/worker",
+        "nats", "@aws-sdk/client-sqs", "@aws-sdk/client-eventbridge",
+        "@nestjs/microservices", "confluent-kafka", "faust-streaming",
+        "celery", "kombu", "dramatiq", "pika", "temporalio",
+        "sarama", "watermill", "confluent-kafka-go",
+    ],
 }
 
 # Friendly labels for drift warnings
@@ -465,6 +473,7 @@ _DRIFT_LABELS = {
     "orm": "New ORM added",
     "auth": "New auth provider",
     "framework": "Major framework change",
+    "event": "New event system detected",
 }
 
 
@@ -548,6 +557,63 @@ def check_dependency_drift(project_dir: Path, result: AuditResult):
             result._deduct("freshness", 2)
 
 
+def check_event_system_config(project_dir: Path, result: AuditResult):
+    """Check event-driven system configuration completeness."""
+    config_path = project_dir / ".claude" / "launchpad-config.json"
+    if not config_path.exists():
+        return
+
+    try:
+        config = json.loads(config_path.read_text())
+    except (json.JSONDecodeError, FileNotFoundError):
+        return
+
+    event_systems = config.get("event_systems", [])
+    if not event_systems:
+        return
+
+    # Check that event consumer rules exist
+    rules_dir = project_dir / ".claude" / "rules"
+    if rules_dir.exists():
+        rule_files = [f.stem for f in rules_dir.glob("*.md")]
+
+        if "event-consumers" not in rule_files:
+            result.add_issue("warning",
+                f"Event systems detected ({', '.join(event_systems)}) but no event-consumers rule",
+                "Run scaffold with --event-systems to generate event consumer rules",
+                category="practices")
+
+        # Check for technology-specific rules
+        for system in event_systems:
+            normalized = system.replace("-", "").replace("_", "")
+            has_rule = any(normalized in rf.replace("-", "").replace("_", "") for rf in rule_files)
+            if not has_rule and system in ("kafka", "bullmq", "rabbitmq", "celery", "temporal"):
+                result.add_issue("warning",
+                    f"Event system '{system}' detected but no {system}-specific rule",
+                    f"Add .claude/rules/{system}.md with {system}-specific conventions",
+                    category="practices")
+
+    # Check that reliability-auditor agent exists
+    agents_dir = project_dir / ".claude" / "agents"
+    if agents_dir.exists():
+        agent_files = [f.stem for f in agents_dir.glob("*.md")]
+        if "reliability-auditor" not in agent_files:
+            result.add_issue("warning",
+                "Event systems detected but no reliability-auditor agent",
+                "Add .claude/agents/reliability-auditor.md for event system review",
+                category="practices")
+
+    # Check for Temporal-specific issues
+    if "temporal" in event_systems:
+        if rules_dir.exists():
+            rule_files = [f.stem for f in rules_dir.glob("*.md")]
+            if "temporal" not in rule_files:
+                result.add_issue("warning",
+                    "Temporal detected but no temporal-specific rule — workflow determinism rules are critical",
+                    "Add .claude/rules/temporal.md with determinism constraints",
+                    category="practices")
+
+
 def check_handoff(project_dir: Path, result: AuditResult):
     """Check handoff document exists."""
     handoff = project_dir / ".claude" / "handoff.md"
@@ -585,6 +651,7 @@ def audit(project_dir: Path) -> AuditResult:
     check_staleness(project_dir, result)
     check_stale_analyzer_rules(project_dir, result)
     check_dependency_drift(project_dir, result)
+    check_event_system_config(project_dir, result)
     check_mcp_servers(project_dir, result)
     check_skills_content(project_dir, result)
     check_commands_content(project_dir, result)

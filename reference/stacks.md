@@ -195,3 +195,90 @@ MCP (Model Context Protocol) servers extend Claude Code with external tool acces
 - **If team**: Filesystem MCP for shared docs
 - **If monitoring**: Sentry MCP for error context
 - **Total**: Aim for 1-3 MCP servers. More adds startup latency
+
+## Event Brokers & Message Queues
+
+### Apache Kafka
+- **Dependencies**: Node.js: `kafkajs`; Python: `confluent-kafka`, `faust-streaming`; Go: `confluent-kafka-go`, `sarama`
+- **Key commands**: `kafka-topics.sh --create`, `kafka-consumer-groups.sh --list`, `kafka-console-consumer.sh`, Schema Registry API for schema management
+- **Rules target**: `**/consumers/**`, `**/producers/**`, `**/handlers/**/*.{ts,py,go}`
+- **Conventions**: Always use `acks=all` for producer reliability. Disable auto topic creation in production. Consumer group IDs must be meaningful and tied to the consuming service. Use Cooperative Sticky assignor to prevent unnecessary rebalances. Schema Registry with backward compatibility enforced. Dead letter topics for every consumer group.
+- **Mistakes**: Never under-partition (creates throughput bottleneck). Never auto-acknowledge before processing completes. Never send giant payloads — store data externally, pass references. Never use record-based subject name strategy in Schema Registry.
+
+### BullMQ
+- **Dependencies**: `bullmq` (Node.js), requires Redis
+- **Rules target**: `**/jobs/**`, `**/queues/**`, `**/workers/**/*.ts`
+- **Conventions**: Workers MUST run in separate processes from the API server. Job processors must be idempotent (retries are normal). Keep job data small — store payloads externally, pass IDs. Configure dead letter queues for failed jobs. Use sandboxed processors for isolation. Set appropriate concurrency limits.
+- **Mistakes**: Never use infinite concurrency (overwhelms downstream services). Never run workers in the API process. Always handle stalled jobs.
+
+### RabbitMQ
+- **Dependencies**: Node.js: `amqplib`; Python: `pika`, `celery`; Go: `amqp091-go`
+- **Rules target**: `**/consumers/**`, `**/publishers/**`, `**/handlers/**`
+- **Conventions**: One TCP connection per process, multiple channels within it. Configure prefetch per consumer (never unlimited). Queues must be durable, messages persistent. Dead letter exchanges (DLX) on every queue. Manual acknowledge only — never auto-ack. Retry with exponential backoff, max attempts before DLX.
+- **Mistakes**: Never create a new connection per request (catastrophic at scale). Never use unlimited prefetch (one consumer gets all messages, OOM). Never requeue rejected messages without retry limit (self-inflicted DoS).
+
+### Celery (Python)
+- **Dependencies**: `celery`, `kombu`, optional: `celery[redis]`, `celery[rabbitmq]`
+- **Rules target**: `**/tasks/**`, `**/celery/**/*.py`
+- **Conventions**: Tasks must be idempotent. Use `task_acks_late = True` (acknowledge after processing). Configure dead letter queue for failed tasks. Set `task_reject_on_worker_lost = True`. Use `bind=True` for access to retry mechanism. Keep task arguments serializable and small.
+- **Mistakes**: Never pass ORM objects as task arguments (not serializable across workers). Always set time limits (tasks run forever otherwise). Never use pickle serializer in production (security risk) — use JSON.
+
+### AWS EventBridge / SQS / SNS
+- **Dependencies**: `@aws-sdk/client-eventbridge`, `@aws-sdk/client-sqs`, `@aws-sdk/client-sns`, Python: `boto3`
+- **Rules target**: `**/events/**`, `**/handlers/**`, `**/lambdas/**`
+- **Conventions**: EventBridge: always have a catch-all rule to archive/audit queue (unmatched events are silently dropped). Use SNS→SQS→Lambda (never SNS→Lambda directly — throttled messages are lost). SQS FIFO when ordering matters (standard is best-effort ordering). Configure DLQ on every SQS queue and SNS subscription. Implement idempotent consumers (SQS delivers at-least-once). Lambda handlers should be thin — delegate to service layer.
+- **Mistakes**: Never omit DLQ on SQS queues. Never use over-broad EventBridge patterns (causes unnecessary invocations). Never ignore visibility timeout (causes duplicate processing).
+
+### NATS
+- **Dependencies**: Node.js: `nats`; Go: `nats.go`; Python: `nats-py`
+- **Rules target**: `**/messaging/**`, `**/subscribers/**`, `**/publishers/**`
+- **Conventions**: Distinguish Core NATS (at-most-once) from JetStream (at-least-once/exactly-once). Subject hierarchies mirror service/domain boundaries (e.g., `orders.created`). Keep JetStream consumers below ~100K per server. Keep disjoint subject filters per consumer below ~300. Connection management centralized with reconnection logic.
+
+### Redis Streams
+- **Dependencies**: `ioredis` (Node.js), `redis-py` (Python), `go-redis` (Go)
+- **Rules target**: `**/streams/**`, `**/consumers/**`
+- **Conventions**: Always configure stream trimming (MAXLEN/MINID) — untrimmed streams grow unboundedly. Acknowledge processed messages (XACK) — PEL grows indefinitely otherwise. Use XAUTOCLAIM for automatic recovery of stale pending messages. Make handlers idempotent (re-delivery is normal). Isolate critical streams from cache data.
+
+## Stream Processing
+
+### Apache Flink
+- **Dependencies**: Java: `flink-streaming-java`; Python: `apache-flink` (PyFlink)
+- **Rules target**: `**/pipelines/**`, `**/jobs/**`, `**/transformations/**`
+- **Conventions**: Use RocksDB state backend in production (not HashMap). Enable incremental checkpointing for large state. Start checkpoint interval at 10-15 minutes, tune from there. Checkpoint storage on reliable distributed storage (S3, HDFS), never local disk. Align Kafka partition count with Flink parallelism. Separate job JARs per pipeline — no monolithic uber jobs. Clear expired state to prevent memory pressure.
+- **Mistakes**: Never use HashMap state backend in production with large state. Never use large watermark thresholds (causes excessive state retention). Always manage state size (clear expired state).
+
+### Apache Spark Streaming
+- **Dependencies**: `pyspark`, `spark-streaming-kafka`
+- **Rules target**: `**/pipelines/**`, `**/streaming/**`
+- **Conventions**: Use Structured Streaming API (not legacy DStreams). Schema definitions explicit, never inferred in production. Checkpoint directory on reliable distributed storage. Use `foreachPartition` for database writes (not per-record connections). Configure `maxFilesPerTrigger` for file-based sources. Align Kafka partition count with Spark parallelism.
+
+## Workflow Orchestration
+
+### Temporal
+- **Dependencies**: Node.js: `@temporalio/client`, `@temporalio/worker`, `@temporalio/workflow`, `@temporalio/activity`; Python: `temporalio`; Go: `go.temporal.io/sdk`
+- **Rules target**: `**/workflows/**/*.ts`, `**/activities/**/*.ts`
+- **Conventions**: **Workflow code MUST be deterministic** — NO I/O, NO `Date.now()`, NO `Math.random()`, NO network calls, NO file access, NO database queries. ALL side effects go in activities. One file per workflow, one file per activity group. Strict separation: workflow definitions (orchestration only) vs activity implementations (all I/O). Use workflow versioning when changing workflow code (prevents non-determinism on replay). Use `continue-as-new` for long-running workflows (prevents unbounded history). Don't set maximum retry limits on activities — use appropriate timeouts instead. Workflows should never "fail" with valid input — return error results, don't throw.
+- **Mistakes**: Never put non-deterministic code in workflows (the #1 Temporal mistake). Never bundle multiple transactions in a single activity. Never use more than one input/output value for workflows and activities. Never use short schedule-to-close timeouts.
+
+## Cross-Cutting Event Patterns
+
+### Event Sourcing
+- **Conventions**: Store state changes as immutable events, not current state. Events immutable once written; schema versioning essential. Implement snapshots for long event histories (rebuilding from scratch is slow). Use infinite retention topics so read models can be rebuilt. Test aggregate rebuilding from event log.
+
+### CQRS
+- **Conventions**: Separate write model (commands) from read model (queries). Read model uses eventual consistency — verify this is acceptable for the use case. Projection/materialization logic must be idempotent. Read models must be rebuildable from event log.
+
+### Saga Pattern
+- **Conventions**: Orchestration (central coordinator) for complex workflows; choreography (event-based) for simple, loosely coupled. Every step MUST have a compensating transaction. Order: retryable transactions after compensable ones. Compensating transactions must also be idempotent. Handle isolation anomalies (concurrent sagas reading dirty data).
+
+### Outbox Pattern
+- **Conventions**: Outbox write in the SAME database transaction as the state change. Separate publisher process reads outbox and publishes to broker. Events have unique IDs for deduplication. Clean outbox table periodically.
+
+### Idempotency
+- **Conventions**: EVERY consumer/worker must be idempotent — this is the single most universal requirement. Track processed message IDs with appropriate TTL. Use database upserts or conditional writes. Exactly-once = idempotent producers + transactional writes + idempotent consumers.
+
+### Dead Letter Queues
+- **Conventions**: Configure DLQ on EVERY consumer/queue — never silently drop messages. Monitor and alert on DLQ depth. Distinguish retryable errors (retry with backoff) from poison messages (DLQ immediately). DLQ messages must include original context (headers, timestamps, error details). Have a process for investigating and replaying DLQ messages.
+
+### Schema Evolution
+- **Conventions**: Use Avro or Protobuf with Schema Registry. Enforce backward compatibility (default and recommended mode). New fields must have defaults; never remove required fields. Test schema compatibility in CI before merge. Consumer-driven contract testing between producer and consumer teams.

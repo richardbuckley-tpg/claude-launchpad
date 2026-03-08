@@ -1291,5 +1291,311 @@ class TestSnapshotDependencies(unittest.TestCase):
         self.assertIn("flask", snap["python"])
 
 
+class TestEventSystemDetection(unittest.TestCase):
+    """Test event system detection from package files."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_kafka_node_detection(self):
+        (self.tmpdir / "package.json").write_text(json.dumps({
+            "dependencies": {"kafkajs": "2.0.0", "express": "4.0.0"},
+            "devDependencies": {}
+        }))
+        stack = detect_stack(self.tmpdir)
+        self.assertIn("event_systems", stack)
+        self.assertIn("kafka", stack["event_systems"])
+
+    def test_bullmq_detection(self):
+        (self.tmpdir / "package.json").write_text(json.dumps({
+            "dependencies": {"bullmq": "4.0.0"},
+            "devDependencies": {}
+        }))
+        stack = detect_stack(self.tmpdir)
+        self.assertIn("event_systems", stack)
+        self.assertIn("bullmq", stack["event_systems"])
+
+    def test_rabbitmq_node_detection(self):
+        (self.tmpdir / "package.json").write_text(json.dumps({
+            "dependencies": {"amqplib": "0.10.0"},
+            "devDependencies": {}
+        }))
+        stack = detect_stack(self.tmpdir)
+        self.assertIn("event_systems", stack)
+        self.assertIn("rabbitmq", stack["event_systems"])
+
+    def test_temporal_node_detection(self):
+        (self.tmpdir / "package.json").write_text(json.dumps({
+            "dependencies": {"@temporalio/client": "1.0.0", "@temporalio/worker": "1.0.0"},
+            "devDependencies": {}
+        }))
+        stack = detect_stack(self.tmpdir)
+        self.assertIn("event_systems", stack)
+        self.assertIn("temporal", stack["event_systems"])
+        self.assertEqual(stack.get("workflow_orchestration"), "temporal")
+
+    def test_nats_node_detection(self):
+        (self.tmpdir / "package.json").write_text(json.dumps({
+            "dependencies": {"nats": "2.0.0"},
+            "devDependencies": {}
+        }))
+        stack = detect_stack(self.tmpdir)
+        self.assertIn("event_systems", stack)
+        self.assertIn("nats", stack["event_systems"])
+
+    def test_aws_events_detection(self):
+        (self.tmpdir / "package.json").write_text(json.dumps({
+            "dependencies": {"@aws-sdk/client-sqs": "3.0.0"},
+            "devDependencies": {}
+        }))
+        stack = detect_stack(self.tmpdir)
+        self.assertIn("event_systems", stack)
+        self.assertIn("aws-events", stack["event_systems"])
+
+    def test_kafka_python_detection(self):
+        (self.tmpdir / "requirements.txt").write_text("confluent-kafka==2.0.0\nfastapi\n")
+        stack = detect_stack(self.tmpdir)
+        self.assertIn("event_systems", stack)
+        self.assertIn("kafka", stack["event_systems"])
+
+    def test_celery_detection(self):
+        (self.tmpdir / "requirements.txt").write_text("celery==5.3.0\nfastapi\n")
+        stack = detect_stack(self.tmpdir)
+        self.assertIn("event_systems", stack)
+        self.assertIn("celery", stack["event_systems"])
+
+    def test_flink_detection(self):
+        (self.tmpdir / "requirements.txt").write_text("apache-flink==1.18.0\n")
+        stack = detect_stack(self.tmpdir)
+        self.assertIn("event_systems", stack)
+        self.assertIn("flink", stack["event_systems"])
+
+    def test_kafka_go_detection(self):
+        (self.tmpdir / "go.mod").write_text(
+            "module example.com/app\n\ngo 1.22\n\n"
+            "require (\n\tgithub.com/IBM/sarama v1.41.0\n)\n"
+        )
+        stack = detect_stack(self.tmpdir)
+        self.assertIn("event_systems", stack)
+        self.assertIn("kafka", stack["event_systems"])
+
+    def test_temporal_go_detection(self):
+        (self.tmpdir / "go.mod").write_text(
+            "module example.com/app\n\ngo 1.22\n\n"
+            "require (\n\tgo.temporal.io/sdk v1.25.0\n)\n"
+        )
+        stack = detect_stack(self.tmpdir)
+        self.assertIn("event_systems", stack)
+        self.assertIn("temporal", stack["event_systems"])
+        self.assertEqual(stack.get("workflow_orchestration"), "temporal")
+
+    def test_kafka_docker_compose_detection(self):
+        (self.tmpdir / "docker-compose.yml").write_text(
+            "services:\n  kafka:\n    image: confluentinc/cp-kafka:7.5.0\n"
+        )
+        stack = detect_stack(self.tmpdir)
+        self.assertIn("event_systems", stack)
+        self.assertIn("kafka", stack["event_systems"])
+
+    def test_rabbitmq_docker_compose_detection(self):
+        (self.tmpdir / "docker-compose.yml").write_text(
+            "services:\n  rabbitmq:\n    image: rabbitmq:3-management\n"
+        )
+        stack = detect_stack(self.tmpdir)
+        self.assertIn("event_systems", stack)
+        self.assertIn("rabbitmq", stack["event_systems"])
+
+    def test_no_event_systems_when_absent(self):
+        (self.tmpdir / "package.json").write_text(json.dumps({
+            "dependencies": {"react": "18.0.0"},
+            "devDependencies": {}
+        }))
+        stack = detect_stack(self.tmpdir)
+        self.assertNotIn("event_systems", stack)
+
+    def test_schema_format_avro_detection(self):
+        (self.tmpdir / "package.json").write_text(json.dumps({
+            "dependencies": {"kafkajs": "2.0.0", "@kafkajs/confluent-schema-registry": "3.0.0"},
+            "devDependencies": {}
+        }))
+        stack = detect_stack(self.tmpdir)
+        self.assertEqual(stack.get("schema_format"), "avro")
+
+    def test_schema_format_protobuf_detection(self):
+        (self.tmpdir / "package.json").write_text(json.dumps({
+            "dependencies": {"protobufjs": "7.0.0"},
+            "devDependencies": {}
+        }))
+        stack = detect_stack(self.tmpdir)
+        self.assertEqual(stack.get("schema_format"), "protobuf")
+
+    def test_avro_file_detection(self):
+        schema_dir = self.tmpdir / "schemas"
+        schema_dir.mkdir()
+        (schema_dir / "user.avsc").write_text('{"type": "record"}')
+        stack = detect_stack(self.tmpdir)
+        self.assertEqual(stack.get("schema_format"), "avro")
+
+    def test_proto_file_detection(self):
+        schema_dir = self.tmpdir / "proto"
+        schema_dir.mkdir()
+        (schema_dir / "events.proto").write_text('syntax = "proto3";')
+        stack = detect_stack(self.tmpdir)
+        self.assertEqual(stack.get("schema_format"), "protobuf")
+
+    def test_multiple_event_systems(self):
+        (self.tmpdir / "package.json").write_text(json.dumps({
+            "dependencies": {"kafkajs": "2.0.0", "bullmq": "4.0.0", "@temporalio/client": "1.0.0"},
+            "devDependencies": {}
+        }))
+        stack = detect_stack(self.tmpdir)
+        self.assertIn("kafka", stack["event_systems"])
+        self.assertIn("bullmq", stack["event_systems"])
+        self.assertIn("temporal", stack["event_systems"])
+
+
+class TestEventPatternDetection(unittest.TestCase):
+    """Test event-driven pattern detection from source code."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        (self.tmpdir / "src").mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_event_sourcing_detection(self):
+        (self.tmpdir / "src" / "aggregate.ts").write_text(
+            "export class OrderAggregate extends AggregateRoot {\n"
+            "  applyEvent(event: DomainEvent) {}\n"
+            "}\n"
+        )
+        from analyze import detect_event_patterns
+        patterns = detect_event_patterns(self.tmpdir)
+        self.assertIn("event-sourcing", patterns)
+
+    def test_cqrs_detection(self):
+        (self.tmpdir / "src" / "handlers.ts").write_text(
+            "export class CreateOrderCommandHandler {\n"
+            "  handle(command: CreateOrderCommand) {}\n"
+            "}\n"
+            "export class GetOrderQueryHandler {\n"
+            "  handle(query: GetOrderQuery) {}\n"
+            "}\n"
+        )
+        from analyze import detect_event_patterns
+        patterns = detect_event_patterns(self.tmpdir)
+        self.assertIn("cqrs", patterns)
+
+    def test_saga_detection(self):
+        (self.tmpdir / "src" / "order_saga.ts").write_text(
+            "export class OrderSaga {\n"
+            "  async orchestrate(step: SagaStep) {\n"
+            "    const compensatingTransaction = this.rollback;\n"
+            "  }\n"
+            "}\n"
+        )
+        from analyze import detect_event_patterns
+        patterns = detect_event_patterns(self.tmpdir)
+        self.assertIn("saga", patterns)
+
+    def test_outbox_detection(self):
+        (self.tmpdir / "src" / "outbox.ts").write_text(
+            "export class OutboxEvent {\n"
+            "  id: string;\n"
+            "  payload: any;\n"
+            "}\n"
+        )
+        from analyze import detect_event_patterns
+        patterns = detect_event_patterns(self.tmpdir)
+        self.assertIn("outbox", patterns)
+
+    def test_no_patterns_in_crud_app(self):
+        (self.tmpdir / "src" / "app.ts").write_text(
+            "import express from 'express';\n"
+            "const app = express();\n"
+            "app.get('/users', getUsers);\n"
+        )
+        from analyze import detect_event_patterns
+        patterns = detect_event_patterns(self.tmpdir)
+        self.assertEqual(patterns, [])
+
+
+class TestEventHandlingPatterns(unittest.TestCase):
+    """Test detect_event_handling_patterns for code-level event patterns."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        (self.tmpdir / "src").mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_detects_consumer_files(self):
+        consumer = self.tmpdir / "src" / "consumer.ts"
+        consumer.write_text("export class OrderConsumer { async handle() {} }")
+        from analyze import detect_event_handling_patterns, collect_source_files
+        files = collect_source_files(self.tmpdir)
+        patterns = detect_event_handling_patterns(self.tmpdir, files, {"event_systems": ["kafka"]})
+        self.assertTrue(len(patterns) > 0)
+        rule_text = "\n".join(patterns[0].rule_lines)
+        self.assertIn("consumer", rule_text.lower())
+
+    def test_detects_idempotency(self):
+        consumer = self.tmpdir / "src" / "consumer.ts"
+        consumer.write_text(
+            "export class OrderConsumer {\n"
+            "  async handle(msg) {\n"
+            "    if (await this.alreadyProcessed(msg.messageId)) return;\n"
+            "  }\n"
+            "}\n"
+        )
+        from analyze import detect_event_handling_patterns, collect_source_files
+        files = collect_source_files(self.tmpdir)
+        patterns = detect_event_handling_patterns(self.tmpdir, files, {"event_systems": ["kafka"]})
+        rule_text = "\n".join(patterns[0].rule_lines)
+        self.assertIn("idempotency", rule_text.lower())
+
+    def test_warns_missing_idempotency(self):
+        consumer = self.tmpdir / "src" / "consumer.ts"
+        consumer.write_text("export class OrderConsumer { async handle(msg) { process(msg); } }")
+        from analyze import detect_event_handling_patterns, collect_source_files
+        files = collect_source_files(self.tmpdir)
+        patterns = detect_event_handling_patterns(self.tmpdir, files, {"event_systems": ["kafka"]})
+        rule_text = "\n".join(patterns[0].rule_lines)
+        self.assertIn("warning", rule_text.lower())
+
+    def test_detects_dlq(self):
+        consumer = self.tmpdir / "src" / "consumer.ts"
+        consumer.write_text(
+            "export class OrderConsumer {\n"
+            "  deadLetterQueue = 'orders.dlq';\n"
+            "}\n"
+        )
+        from analyze import detect_event_handling_patterns, collect_source_files
+        files = collect_source_files(self.tmpdir)
+        patterns = detect_event_handling_patterns(self.tmpdir, files, {"event_systems": ["kafka"]})
+        rule_text = "\n".join(patterns[0].rule_lines)
+        self.assertIn("dead letter", rule_text.lower())
+
+    def test_no_patterns_without_event_systems(self):
+        consumer = self.tmpdir / "src" / "consumer.ts"
+        consumer.write_text("export class OrderConsumer { async handle() {} }")
+        from analyze import detect_event_handling_patterns, collect_source_files
+        files = collect_source_files(self.tmpdir)
+        patterns = detect_event_handling_patterns(self.tmpdir, files, {})
+        self.assertEqual(patterns, [])
+
+    def test_category_keywords_include_events(self):
+        from analyze import CATEGORY_KEYWORDS
+        self.assertIn("event-handling", CATEGORY_KEYWORDS)
+        self.assertIn("kafka", CATEGORY_KEYWORDS["event-handling"])
+        self.assertIn("consumer", CATEGORY_KEYWORDS["event-handling"])
+        self.assertIn("idempoten", CATEGORY_KEYWORDS["event-handling"])
+
+
 if __name__ == "__main__":
     unittest.main()

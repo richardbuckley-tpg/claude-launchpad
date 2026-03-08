@@ -83,6 +83,10 @@ def make_args(**overrides):
         "migrate_ai_configs": False,
         "_monorepo_info": None,
         "_dep_snapshot": None,
+        "event_systems": [],
+        "event_patterns": [],
+        "schema_format": "none",
+        "workflow_orchestration": "none",
     }
     defaults.update(overrides)
     return Namespace(**defaults)
@@ -1567,6 +1571,229 @@ class TestEnhancedAutoDetection(unittest.TestCase):
         data = json.loads(config_path.read_text())
         self.assertIn("dependency_snapshot", data)
         self.assertEqual(data["dependency_snapshot"]["node"]["react"], "18.0.0")
+
+
+class TestEventSystemRules(unittest.TestCase):
+    """Test event-driven system rule generation."""
+
+    def test_kafka_rule_generated(self):
+        args = make_args(event_systems=["kafka"], backend="node-express")
+        rules = get_rules(args)
+        names = [n for n, _ in rules]
+        self.assertIn("event-consumers", names)
+        content = dict(rules)["event-consumers"]
+        self.assertIn("kafka", content.lower())
+        self.assertIn("idempotent", content.lower())
+        self.assertIn("dead letter", content.lower())
+
+    def test_bullmq_rule_generated(self):
+        args = make_args(event_systems=["bullmq"], backend="node-express")
+        rules = get_rules(args)
+        content = dict(rules)["event-consumers"]
+        self.assertIn("bullmq", content.lower())
+        self.assertIn("separate processes", content.lower())
+
+    def test_rabbitmq_rule_generated(self):
+        args = make_args(event_systems=["rabbitmq"], backend="python-fastapi")
+        rules = get_rules(args)
+        content = dict(rules)["event-consumers"]
+        self.assertIn("rabbitmq", content.lower())
+        self.assertIn("prefetch", content.lower())
+        # Python backend should have .py globs
+        self.assertIn("*.py", content)
+
+    def test_celery_rule_generated(self):
+        args = make_args(event_systems=["celery"], backend="python-fastapi")
+        rules = get_rules(args)
+        content = dict(rules)["event-consumers"]
+        self.assertIn("celery", content.lower())
+        self.assertIn("pickle", content.lower())
+
+    def test_nats_rule_generated(self):
+        args = make_args(event_systems=["nats"], backend="go")
+        rules = get_rules(args)
+        content = dict(rules)["event-consumers"]
+        self.assertIn("nats", content.lower())
+        self.assertIn("*.go", content)
+
+    def test_multiple_event_systems(self):
+        args = make_args(event_systems=["kafka", "bullmq"], backend="node-express")
+        rules = get_rules(args)
+        content = dict(rules)["event-consumers"]
+        self.assertIn("kafka", content.lower())
+        self.assertIn("bullmq", content.lower())
+
+    def test_no_event_rule_without_systems(self):
+        args = make_args(event_systems=[])
+        rules = get_rules(args)
+        names = [n for n, _ in rules]
+        self.assertNotIn("event-consumers", names)
+
+    def test_schema_format_in_rule(self):
+        args = make_args(event_systems=["kafka"], schema_format="avro", backend="node-express")
+        rules = get_rules(args)
+        content = dict(rules)["event-consumers"]
+        self.assertIn("avro", content.lower())
+        self.assertIn("backward compatibility", content.lower())
+
+    def test_temporal_rule_generated(self):
+        args = make_args(event_systems=["temporal"], workflow_orchestration="temporal", backend="node-express")
+        rules = get_rules(args)
+        names = [n for n, _ in rules]
+        self.assertIn("temporal", names)
+        content = dict(rules)["temporal"]
+        self.assertIn("deterministic", content.lower())
+        self.assertIn("activities", content.lower())
+        self.assertIn("*.ts", content)
+
+    def test_temporal_rule_python_globs(self):
+        args = make_args(workflow_orchestration="temporal", backend="python-fastapi")
+        rules = get_rules(args)
+        content = dict(rules)["temporal"]
+        self.assertIn("*.py", content)
+
+    def test_temporal_rule_go_globs(self):
+        args = make_args(workflow_orchestration="temporal", backend="go")
+        rules = get_rules(args)
+        content = dict(rules)["temporal"]
+        self.assertIn("*.go", content)
+
+    def test_event_sourcing_pattern_rule(self):
+        args = make_args(event_patterns=["event-sourcing"])
+        rules = get_rules(args)
+        names = [n for n, _ in rules]
+        self.assertIn("event-patterns", names)
+        content = dict(rules)["event-patterns"]
+        self.assertIn("immutable", content.lower())
+
+    def test_cqrs_pattern_rule(self):
+        args = make_args(event_patterns=["cqrs"])
+        rules = get_rules(args)
+        content = dict(rules)["event-patterns"]
+        self.assertIn("write model", content.lower())
+        self.assertIn("read model", content.lower())
+
+    def test_saga_pattern_rule(self):
+        args = make_args(event_patterns=["saga"])
+        rules = get_rules(args)
+        content = dict(rules)["event-patterns"]
+        self.assertIn("compensat", content.lower())
+
+    def test_outbox_pattern_rule(self):
+        args = make_args(event_patterns=["outbox"])
+        rules = get_rules(args)
+        content = dict(rules)["event-patterns"]
+        self.assertIn("outbox", content.lower())
+        self.assertIn("same database transaction", content.lower())
+
+    def test_no_pattern_rule_without_patterns(self):
+        args = make_args(event_patterns=[])
+        rules = get_rules(args)
+        names = [n for n, _ in rules]
+        self.assertNotIn("event-patterns", names)
+
+
+class TestEventSystemAgents(unittest.TestCase):
+    """Test event-driven system agent generation."""
+
+    def test_reliability_auditor_generated(self):
+        args = make_args(event_systems=["kafka", "bullmq"])
+        agents = get_agents(args)
+        names = [n for n, _ in agents]
+        self.assertIn("reliability-auditor", names)
+        content = dict(agents)["reliability-auditor"]
+        self.assertIn("idempoten", content.lower())
+        self.assertIn("dead letter", content.lower())
+        self.assertIn("kafka", content.lower())
+        self.assertIn("bullmq", content.lower())
+
+    def test_reliability_auditor_temporal_checks(self):
+        args = make_args(event_systems=["temporal"])
+        agents = get_agents(args)
+        content = dict(agents)["reliability-auditor"]
+        self.assertIn("temporal", content.lower())
+        self.assertIn("deterministic", content.lower())
+
+    def test_no_reliability_auditor_without_events(self):
+        args = make_args(event_systems=[])
+        agents = get_agents(args)
+        names = [n for n, _ in agents]
+        self.assertNotIn("reliability-auditor", names)
+
+    def test_reliability_auditor_celery_checks(self):
+        args = make_args(event_systems=["celery"])
+        agents = get_agents(args)
+        content = dict(agents)["reliability-auditor"]
+        self.assertIn("celery", content.lower())
+
+    def test_reliability_auditor_rabbitmq_checks(self):
+        args = make_args(event_systems=["rabbitmq"])
+        agents = get_agents(args)
+        content = dict(agents)["reliability-auditor"]
+        self.assertIn("rabbitmq", content.lower())
+
+
+class TestEventSystemScaffold(unittest.TestCase):
+    """Test end-to-end scaffold with event systems."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_event_config_saved(self):
+        args = make_args(
+            output_dir=str(self.tmpdir), create_root=True,
+            event_systems=["kafka", "bullmq"],
+            event_patterns=["saga"],
+            schema_format="avro",
+            workflow_orchestration="temporal",
+        )
+        scaffold(args)
+        config_path = self.tmpdir / "test-app" / ".claude" / "launchpad-config.json"
+        data = json.loads(config_path.read_text())
+        self.assertEqual(data["event_systems"], ["kafka", "bullmq"])
+        self.assertEqual(data["event_patterns"], ["saga"])
+        self.assertEqual(data["schema_format"], "avro")
+        self.assertEqual(data["workflow_orchestration"], "temporal")
+
+    def test_event_rules_created(self):
+        args = make_args(
+            output_dir=str(self.tmpdir), create_root=True,
+            event_systems=["kafka"],
+        )
+        scaffold(args)
+        rules_dir = self.tmpdir / "test-app" / ".claude" / "rules"
+        self.assertTrue((rules_dir / "event-consumers.md").exists())
+
+    def test_temporal_rule_created(self):
+        args = make_args(
+            output_dir=str(self.tmpdir), create_root=True,
+            event_systems=["temporal"],
+            workflow_orchestration="temporal",
+        )
+        scaffold(args)
+        rules_dir = self.tmpdir / "test-app" / ".claude" / "rules"
+        self.assertTrue((rules_dir / "temporal.md").exists())
+
+    def test_reliability_auditor_created(self):
+        args = make_args(
+            output_dir=str(self.tmpdir), create_root=True,
+            event_systems=["kafka"],
+        )
+        scaffold(args)
+        agents_dir = self.tmpdir / "test-app" / ".claude" / "agents"
+        self.assertTrue((agents_dir / "reliability-auditor.md").exists())
+
+    def test_event_patterns_rule_created(self):
+        args = make_args(
+            output_dir=str(self.tmpdir), create_root=True,
+            event_patterns=["event-sourcing", "cqrs"],
+        )
+        scaffold(args)
+        rules_dir = self.tmpdir / "test-app" / ".claude" / "rules"
+        self.assertTrue((rules_dir / "event-patterns.md").exists())
 
 
 if __name__ == "__main__":

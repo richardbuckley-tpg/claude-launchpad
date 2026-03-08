@@ -240,6 +240,57 @@ def detect_monorepo(project_dir: Path):
     return None
 
 
+# ── Event Pattern Detection ──────────────────────────────────────────────
+
+
+def detect_event_patterns(project_dir: Path) -> list[str]:
+    """Detect event-driven architectural patterns from source code."""
+    patterns = []
+
+    # Scan source directories for pattern indicators
+    src_dirs = ["src", "app", "lib", "pkg", "internal", "server"]
+    files_to_scan = []
+    for sd in src_dirs:
+        d = project_dir / sd
+        if d.exists():
+            files_to_scan.extend(d.rglob("*.ts"))
+            files_to_scan.extend(d.rglob("*.py"))
+            files_to_scan.extend(d.rglob("*.go"))
+            files_to_scan.extend(d.rglob("*.java"))
+
+    # Limit scanning to first 100 files to keep it fast
+    content_sample = ""
+    for f in list(files_to_scan)[:100]:
+        try:
+            content_sample += f.read_text(errors="ignore") + "\n"
+        except (OSError, UnicodeDecodeError):
+            pass
+
+    content_lower = content_sample.lower()
+
+    # Event sourcing indicators
+    if any(term in content_lower for term in ["eventsource", "event_source", "eventstore", "event_store", "aggregate_root", "aggregateroot", "apply_event", "applyevent"]):
+        patterns.append("event-sourcing")
+
+    # CQRS indicators
+    if any(term in content_lower for term in ["commandhandler", "command_handler", "queryhandler", "query_handler", "readmodel", "read_model", "projection"]):
+        patterns.append("cqrs")
+
+    # Saga indicators
+    if any(term in content_lower for term in ["saga", "compensat", "orchestrat"]) and any(term in content_lower for term in ["step", "transaction", "rollback"]):
+        patterns.append("saga")
+
+    # Outbox pattern indicators
+    if any(term in content_lower for term in ["outbox", "outbox_events", "outboxevent"]):
+        patterns.append("outbox")
+
+    # DLQ indicators
+    if any(term in content_lower for term in ["deadletter", "dead_letter", "dlq", "dead letter"]):
+        patterns.append("dlq")
+
+    return patterns
+
+
 # ── Stack Detection ──────────────────────────────────────────────────────
 
 def detect_stack(project_dir: Path) -> dict:
@@ -305,6 +356,32 @@ def detect_stack(project_dir: Path) -> dict:
             elif "@supabase/supabase-js" in deps:
                 stack["auth"] = "supabase-auth"
 
+            # Event systems
+            event_systems = []
+            if "kafkajs" in deps or "node-rdkafka" in deps:
+                event_systems.append("kafka")
+            if "bullmq" in deps or "bull" in deps:
+                event_systems.append("bullmq")
+            if "amqplib" in deps or "amqp-connection-manager" in deps:
+                event_systems.append("rabbitmq")
+            if "@temporalio/client" in deps or "@temporalio/worker" in deps:
+                event_systems.append("temporal")
+                stack["workflow_orchestration"] = "temporal"
+            if "nats" in deps or "nats.ws" in deps:
+                event_systems.append("nats")
+            if "@aws-sdk/client-sqs" in deps or "@aws-sdk/client-eventbridge" in deps:
+                event_systems.append("aws-events")
+            if "@nestjs/microservices" in deps:
+                event_systems.append("nestjs-microservices")
+            if event_systems:
+                stack["event_systems"] = event_systems
+
+            # Schema format
+            if "@kafkajs/confluent-schema-registry" in deps or "avsc" in deps:
+                stack["schema_format"] = "avro"
+            elif "protobufjs" in deps or "google-protobuf" in deps:
+                stack["schema_format"] = "protobuf"
+
             # Database from ORM
             if stack.get("orm") in ("prisma", "drizzle", "typeorm", "sequelize"):
                 stack["database"] = "postgresql"  # most common default
@@ -360,6 +437,38 @@ def detect_stack(project_dir: Path) -> dict:
             if "pytest" in content:
                 stack["test_framework"] = "pytest"
 
+            # Event systems
+            event_systems = stack.get("event_systems", [])
+            if "confluent-kafka" in content or "confluent_kafka" in content:
+                event_systems.append("kafka")
+            if "faust" in content or "faust-streaming" in content:
+                event_systems.append("faust")
+            if "celery" in content:
+                event_systems.append("celery")
+            if "pika" in content or "kombu" in content:
+                event_systems.append("rabbitmq")
+            if "dramatiq" in content:
+                event_systems.append("dramatiq")
+            if "temporalio" in content:
+                event_systems.append("temporal")
+                stack["workflow_orchestration"] = "temporal"
+            if "nats" in content and "nats-py" in content:
+                event_systems.append("nats")
+            if "boto3" in content:
+                # Check for specific AWS event services - we only flag if sqs/eventbridge specifically
+                pass  # Can't distinguish from generic boto3 usage
+            if "apache-flink" in content or "pyflink" in content:
+                event_systems.append("flink")
+            if "pyspark" in content:
+                event_systems.append("spark-streaming")
+            if event_systems:
+                stack["event_systems"] = event_systems
+
+            if "avro" in content:
+                stack["schema_format"] = "avro"
+            elif "protobuf" in content or "grpcio" in content:
+                stack["schema_format"] = "protobuf"
+
             # Command detection from pyproject.toml
             if pyproject.exists():
                 pyproject_content = pyproject.read_text()
@@ -384,6 +493,25 @@ def detect_stack(project_dir: Path) -> dict:
         stack["language"] = "go"
         stack["backend"] = "go"
         stack["test_framework"] = "go-test"
+
+        try:
+            go_mod_content = (project_dir / "go.mod").read_text().lower()
+            event_systems = stack.get("event_systems", [])
+            if "sarama" in go_mod_content or "confluent-kafka-go" in go_mod_content:
+                event_systems.append("kafka")
+            if "watermill" in go_mod_content:
+                event_systems.append("watermill")
+            if "amqp091-go" in go_mod_content or "streadway/amqp" in go_mod_content:
+                event_systems.append("rabbitmq")
+            if "go.temporal.io" in go_mod_content:
+                event_systems.append("temporal")
+                stack["workflow_orchestration"] = "temporal"
+            if "nats.go" in go_mod_content or "nats-io/nats.go" in go_mod_content:
+                event_systems.append("nats")
+            if event_systems:
+                stack["event_systems"] = event_systems
+        except (UnicodeDecodeError, FileNotFoundError):
+            pass
 
     # Rust detection
     cargo_toml = project_dir / "Cargo.toml"
@@ -482,6 +610,55 @@ def detect_stack(project_dir: Path) -> dict:
         stack["hosting"] = "aws"
     elif (project_dir / "Dockerfile").exists() and "hosting" not in stack:
         stack["hosting"] = "self-hosted"
+
+    # Event system detection from docker-compose
+    for compose_file in ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"]:
+        compose_path = project_dir / compose_file
+        if compose_path.exists():
+            try:
+                compose_content = compose_path.read_text().lower()
+                event_systems = stack.get("event_systems", [])
+                if "kafka" in compose_content or "confluent" in compose_content:
+                    if "kafka" not in event_systems:
+                        event_systems.append("kafka")
+                if "rabbitmq" in compose_content:
+                    if "rabbitmq" not in event_systems:
+                        event_systems.append("rabbitmq")
+                if "redis" in compose_content and ("bullmq" in str(stack.get("event_systems", [])) or "streams" in compose_content):
+                    pass  # Redis already detected via package deps
+                if "nats" in compose_content:
+                    if "nats" not in event_systems:
+                        event_systems.append("nats")
+                if "temporal" in compose_content:
+                    if "temporal" not in event_systems:
+                        event_systems.append("temporal")
+                    stack["workflow_orchestration"] = "temporal"
+                if "pulsar" in compose_content:
+                    if "pulsar" not in event_systems:
+                        event_systems.append("pulsar")
+                if event_systems:
+                    stack["event_systems"] = event_systems
+            except UnicodeDecodeError:
+                pass
+            break  # Only read first found compose file
+
+    # Schema format detection from files
+    if "schema_format" not in stack:
+        # Check common schema directories
+        for schema_dir in ["schemas", "schema", "avro", "proto", "protobuf", "src/schemas", "src/proto"]:
+            sd = project_dir / schema_dir
+            if sd.exists():
+                if list(sd.glob("*.avsc"))[:1]:
+                    stack["schema_format"] = "avro"
+                    break
+                if list(sd.glob("*.proto"))[:1]:
+                    stack["schema_format"] = "protobuf"
+                    break
+
+    # Event pattern detection
+    event_patterns = detect_event_patterns(project_dir)
+    if event_patterns:
+        stack["event_patterns"] = event_patterns
 
     # Monorepo detection
     monorepo = detect_monorepo(project_dir)
@@ -1122,6 +1299,113 @@ def detect_database_patterns(project_dir: Path, files: list, stack: dict) -> lis
     return patterns
 
 
+def detect_event_handling_patterns(project_dir: Path, files: list, stack: dict) -> list:
+    """Detect event-driven handling patterns (idempotency, retry, DLQ, schema validation)."""
+    patterns = []
+    lang = stack.get("language", "")
+    event_systems = stack.get("event_systems", [])
+
+    if not event_systems:
+        return patterns
+
+    consumer_files = []
+    producer_files = []
+    idempotency_files = []
+    retry_files = []
+    dlq_files = []
+    schema_validation_files = []
+
+    for fp in files:
+        content = read_file_safe(fp)
+        rel = str(fp.relative_to(project_dir))
+        content_lower = content.lower()
+
+        is_consumer = any(kw in rel.lower() for kw in ["consumer", "handler", "subscriber", "listener", "worker", "processor"])
+        is_producer = any(kw in rel.lower() for kw in ["producer", "publisher", "emitter", "dispatcher", "sender"])
+
+        if is_consumer:
+            consumer_files.append(rel)
+        if is_producer:
+            producer_files.append(rel)
+
+        # Idempotency checks
+        if is_consumer and any(term in content_lower for term in [
+            "idempoten", "dedup", "already_processed", "alreadyprocessed",
+            "message_id", "messageid", "idempotency_key", "idempotencykey",
+        ]):
+            idempotency_files.append(rel)
+
+        # Retry / backoff configurations
+        if any(term in content_lower for term in [
+            "retry", "backoff", "exponential_backoff", "exponentialbackoff",
+            "max_retries", "maxretries", "retry_count", "retrycount",
+            "retry_policy", "retrypolicy",
+        ]):
+            retry_files.append(rel)
+
+        # DLQ setup
+        if any(term in content_lower for term in [
+            "deadletter", "dead_letter", "dlq", "dead letter queue",
+            "failed_messages", "failedmessages", "poison",
+        ]):
+            dlq_files.append(rel)
+
+        # Schema validation in producers
+        if is_producer and any(term in content_lower for term in [
+            "schema", "validate", "avro", "protobuf", "serialize", "encode",
+        ]):
+            schema_validation_files.append(rel)
+
+    rules = []
+    evidence = []
+
+    if consumer_files:
+        rules.append(f"- Event consumers in: {', '.join(consumer_files[:3])}")
+        evidence.extend(consumer_files[:3])
+
+    if producer_files:
+        rules.append(f"- Event producers in: {', '.join(producer_files[:3])}")
+        evidence.extend(producer_files[:3])
+
+    if idempotency_files:
+        rules.append(f"- Idempotency checks found in: {', '.join(idempotency_files[:3])}")
+        rules.append("- ALL event consumers MUST implement idempotency — follow existing patterns")
+    elif consumer_files:
+        rules.append("- WARNING: No idempotency checks detected in consumers — add deduplication")
+
+    if retry_files:
+        rules.append(f"- Retry/backoff configured in: {', '.join(retry_files[:3])}")
+        rules.append("- Use existing retry configuration patterns — never implement custom retry loops")
+
+    if dlq_files:
+        rules.append(f"- Dead letter queue handling in: {', '.join(dlq_files[:3])}")
+        rules.append("- Failed messages must route to DLQ — never silently drop events")
+
+    if schema_validation_files:
+        rules.append(f"- Schema validation in producers: {', '.join(schema_validation_files[:3])}")
+        rules.append("- All produced events MUST be schema-validated before publishing")
+
+    if rules:
+        globs = ["**/*.ts", "**/*.py", "**/*.go"] if lang == "" else [f"**/*.{lang[:2]}"]
+        if lang in ("typescript", "javascript"):
+            globs = ["**/*.ts", "**/*.tsx", "**/*.js"]
+        elif lang == "python":
+            globs = ["**/*.py"]
+        elif lang == "go":
+            globs = ["**/*.go"]
+
+        patterns.append(Pattern(
+            category="event-handling",
+            description="Event-driven patterns",
+            evidence=evidence[:5],
+            rule_lines=rules,
+            globs=globs,
+            confidence=0.8 if len(evidence) >= 3 else 0.6,
+        ))
+
+    return patterns
+
+
 # ── File Organization ────────────────────────────────────────────────────
 
 def detect_file_organization(project_dir: Path, files: list, stack: dict) -> dict:
@@ -1257,6 +1541,7 @@ def analyze(project_dir: Path) -> AnalysisResult:
     all_patterns.extend(detect_testing_patterns(project_dir, files, stack))
     all_patterns.extend(detect_api_patterns(project_dir, files, stack))
     all_patterns.extend(detect_database_patterns(project_dir, files, stack))
+    all_patterns.extend(detect_event_handling_patterns(project_dir, files, stack))
 
     # Filter by confidence
     confident = [p for p in all_patterns if p.confidence >= 0.5]
@@ -1357,6 +1642,7 @@ CATEGORY_KEYWORDS = {
     "testing": ["test", "mock", "fixture", "jest", "vitest", "pytest", "spec", "assert"],
     "api": ["endpoint", "route", "controller", "handler", "response", "pagination", "rest"],
     "database": ["database", "db", "query", "repository", "orm", "prisma", "migration", "model"],
+    "event-handling": ["event", "kafka", "rabbitmq", "bullmq", "celery", "consumer", "producer", "queue", "message", "saga", "cqrs", "dlq", "idempoten", "temporal"],
 }
 
 
