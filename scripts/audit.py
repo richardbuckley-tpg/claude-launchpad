@@ -23,10 +23,6 @@ from pathlib import Path
 
 TOKENS_PER_LINE = 4  # Conservative heuristic for markdown with code
 
-# Comparison baselines (estimated from default configs as of 2025)
-BASELINE_ECC_TOKENS = 7200
-BASELINE_STARTER_KIT_TOKENS = 5100
-
 
 def count_lines(filepath: Path) -> int:
     """Count non-empty lines in a file."""
@@ -491,19 +487,21 @@ def format_report(result: AuditResult) -> str:
             if issue.get("fix"):
                 lines.append(f"  {i}. {issue['fix']}")
 
-    # Comparison context
-    lines.extend([
-        "",
-        "Comparison",
-        f"  ECC default:         ~{BASELINE_ECC_TOKENS:,d} tokens",
-        f"  Starter Kit default: ~{BASELINE_STARTER_KIT_TOKENS:,d} tokens",
-        f"  Your config:         ~{result.total_tokens:,d} tokens",
-    ])
-
+    # Context window impact
     if result.total_tokens > 0:
-        pct = round((1 - result.total_tokens / BASELINE_ECC_TOKENS) * 100)
-        if pct > 0:
-            lines.append(f"  ({pct}% more efficient than ECC)")
+        context_pct = round(result.total_tokens / 200000 * 100, 1)
+        lines.extend([
+            "",
+            "Context Window Impact",
+            f"  Config tokens:       ~{result.total_tokens:,d}",
+            f"  Context usage:       ~{context_pct}% of 200k",
+        ])
+        if context_pct < 2:
+            lines.append("  Very lean — minimal impact on available context")
+        elif context_pct < 5:
+            lines.append("  Good — well within recommended budget")
+        else:
+            lines.append("  Consider trimming — aim for <5% of context window")
 
     return "\n".join(lines)
 

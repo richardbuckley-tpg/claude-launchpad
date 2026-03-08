@@ -11,8 +11,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from audit import (
     AuditResult,
-    BASELINE_ECC_TOKENS,
-    BASELINE_STARTER_KIT_TOKENS,
     TOKENS_PER_LINE,
     apply_fixes,
     audit,
@@ -467,12 +465,12 @@ class TestFullAudit(unittest.TestCase):
         self.assertIn("Health Score:", report)
         self.assertIn("/100", report)
 
-    def test_format_report_includes_comparison(self):
+    def test_format_report_includes_context_impact(self):
         project_dir = make_project(self.tmpdir, handoff=True)
         result = audit(project_dir)
         report = format_report(result)
-        self.assertIn("ECC default", report)
-        self.assertIn(f"{BASELINE_ECC_TOKENS:,d}", report)  # formatted with commas
+        self.assertIn("Context Window Impact", report)
+        self.assertIn("200k", report)
 
     def test_json_output_valid(self):
         project_dir = make_project(self.tmpdir, handoff=True)
