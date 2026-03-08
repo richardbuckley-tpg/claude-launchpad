@@ -402,6 +402,55 @@ def check_context_percentage(project_dir: Path, result: AuditResult):
             category="efficiency")
 
 
+def check_stale_analyzer_rules(project_dir: Path, result: AuditResult):
+    """Check if project-*.md analyzer rules have stale references."""
+    rules_dir = project_dir / ".claude" / "rules"
+    if not rules_dir.exists():
+        return
+
+    project_rules = list(rules_dir.glob("project-*.md"))
+    if not project_rules:
+        return
+
+    for rf in project_rules:
+        try:
+            content = rf.read_text()
+        except UnicodeDecodeError:
+            continue
+
+        # Check backtick-quoted file paths
+        referenced_files = re.findall(r'`([a-zA-Z0-9_./-]+\.[a-zA-Z]+)`', content)
+        for ref in referenced_files:
+            ref_path = project_dir / ref
+            if not ref_path.exists() and not any(c in ref for c in ['*', '?', '{']):
+                result.add_issue("warning",
+                    f"Analyzer rule {rf.name} references `{ref}` which no longer exists",
+                    f"Run /evolve to re-analyze and update rules",
+                    category="freshness")
+                break  # One warning per rule file is enough
+
+    # Check if analysis is outdated
+    config_path = project_dir / ".claude" / "launchpad-config.json"
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text())
+            last_analysis = config.get("last_analysis")
+            if last_analysis:
+                from datetime import datetime
+                try:
+                    last_dt = datetime.fromisoformat(last_analysis)
+                    days_ago = (datetime.now() - last_dt).days
+                    if days_ago > 60:
+                        result.add_issue("warning",
+                            f"Codebase analysis is {days_ago} days old",
+                            "Run /evolve to re-analyze and keep rules current",
+                            category="freshness")
+                except (ValueError, TypeError):
+                    pass
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass
+
+
 def check_handoff(project_dir: Path, result: AuditResult):
     """Check handoff document exists."""
     handoff = project_dir / ".claude" / "handoff.md"
@@ -437,6 +486,7 @@ def audit(project_dir: Path) -> AuditResult:
     check_rules(project_dir, result)
     check_settings(project_dir, result)
     check_staleness(project_dir, result)
+    check_stale_analyzer_rules(project_dir, result)
     check_mcp_servers(project_dir, result)
     check_skills_content(project_dir, result)
     check_commands_content(project_dir, result)

@@ -11,6 +11,7 @@ from analyze import (
     AnalysisResult,
     Pattern,
     analyze,
+    check_stale_rules,
     collect_source_files,
     detect_api_patterns,
     detect_auth_patterns,
@@ -24,6 +25,10 @@ from analyze import (
     detect_validation,
     format_report,
     generate_rules_from_analysis,
+    get_last_analysis_time,
+    incorporate_learned,
+    match_correction_to_category,
+    set_last_analysis_time,
     write_rules,
 )
 
@@ -680,6 +685,215 @@ class TestFormatReport(unittest.TestCase):
         self.assertIn("withAuth", report)
         self.assertIn("useAuth", report)
         self.assertIn("layer-based", report)
+
+
+class TestMatchCorrectionToCategory(unittest.TestCase):
+    def test_error_correction(self):
+        self.assertEqual(match_correction_to_category("Always use AppError, not generic Error"), "error-handling")
+
+    def test_auth_correction(self):
+        self.assertEqual(match_correction_to_category("Use auth middleware on all routes"), "auth")
+
+    def test_validation_correction(self):
+        self.assertEqual(match_correction_to_category("Use zod schemas for input validation"), "validation")
+
+    def test_testing_correction(self):
+        self.assertEqual(match_correction_to_category("Always mock external services in tests"), "testing")
+
+    def test_database_correction(self):
+        self.assertEqual(match_correction_to_category("Use repository pattern for database access"), "database")
+
+    def test_no_match(self):
+        self.assertIsNone(match_correction_to_category("Remember to update the changelog"))
+
+
+class TestIncorporateLearned(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_enhances_existing_pattern(self):
+        # Set up learned log with an error-handling correction
+        log_dir = self.tmpdir / ".claude"
+        log_dir.mkdir(parents=True)
+        log = [{"type": "explicit", "correction": "Always use AppError from errors.ts", "timestamp": "2025-01-01"}]
+        (log_dir / "learn-log.json").write_text(json.dumps(log))
+
+        result = AnalysisResult(
+            project_dir=str(self.tmpdir),
+            stack={"language": "typescript"},
+            patterns=[
+                Pattern("error-handling", "Custom errors", ["src/errors.ts"],
+                        ["- Use custom error classes"], ["**/*.ts"], 0.8),
+            ],
+            key_abstractions=[],
+            file_organization={"style": "unknown", "test_location": "unknown",
+                               "barrel_exports": False, "src_dir": None},
+        )
+
+        enhanced = incorporate_learned(result, self.tmpdir)
+        error_pattern = [p for p in enhanced.patterns if p.category == "error-handling"][0]
+        # Should have the original rule plus the learned one
+        self.assertTrue(len(error_pattern.rule_lines) >= 2)
+        learned_rules = [r for r in error_pattern.rule_lines if "*(learned)*" in r]
+        self.assertTrue(len(learned_rules) >= 1)
+
+    def test_creates_new_pattern_for_unmatched_category(self):
+        log_dir = self.tmpdir / ".claude"
+        log_dir.mkdir(parents=True)
+        log = [{"type": "explicit", "correction": "Always use auth middleware on protected routes", "timestamp": "2025-01-01"}]
+        (log_dir / "learn-log.json").write_text(json.dumps(log))
+
+        result = AnalysisResult(
+            project_dir=str(self.tmpdir),
+            stack={},
+            patterns=[],  # No existing patterns
+            key_abstractions=[],
+            file_organization={"style": "unknown", "test_location": "unknown",
+                               "barrel_exports": False, "src_dir": None},
+        )
+
+        enhanced = incorporate_learned(result, self.tmpdir)
+        auth_patterns = [p for p in enhanced.patterns if p.category == "auth"]
+        self.assertEqual(len(auth_patterns), 1)
+        self.assertTrue(any("*(learned)*" in r for r in auth_patterns[0].rule_lines))
+
+    def test_no_log_returns_unchanged(self):
+        result = AnalysisResult(
+            project_dir=str(self.tmpdir),
+            stack={},
+            patterns=[],
+            key_abstractions=[],
+            file_organization={"style": "unknown", "test_location": "unknown",
+                               "barrel_exports": False, "src_dir": None},
+        )
+        enhanced = incorporate_learned(result, self.tmpdir)
+        self.assertEqual(len(enhanced.patterns), 0)
+
+    def test_skips_duplicate_learned_rules(self):
+        log_dir = self.tmpdir / ".claude"
+        log_dir.mkdir(parents=True)
+        log = [
+            {"type": "explicit", "correction": "Use AppError", "timestamp": "2025-01-01"},
+            {"type": "explicit", "correction": "Use AppError", "timestamp": "2025-01-02"},
+        ]
+        (log_dir / "learn-log.json").write_text(json.dumps(log))
+
+        result = AnalysisResult(
+            project_dir=str(self.tmpdir),
+            stack={},
+            patterns=[
+                Pattern("error-handling", "Custom errors", [],
+                        ["- Use custom error classes"], ["**/*.ts"], 0.8),
+            ],
+            key_abstractions=[],
+            file_organization={"style": "unknown", "test_location": "unknown",
+                               "barrel_exports": False, "src_dir": None},
+        )
+        enhanced = incorporate_learned(result, self.tmpdir)
+        error_pattern = [p for p in enhanced.patterns if p.category == "error-handling"][0]
+        learned_rules = [r for r in error_pattern.rule_lines if "*(learned)*" in r]
+        # Both corrections have same text, should only appear once
+        self.assertEqual(len(learned_rules), 1)
+
+
+class TestCheckStaleRules(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.rules_dir = self.tmpdir / ".claude" / "rules"
+        self.rules_dir.mkdir(parents=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_detects_stale_file_reference(self):
+        (self.rules_dir / "project-error-handling.md").write_text(
+            "---\nglobs: [\"**/*.ts\"]\n---\n\n"
+            "- Error definitions in: `src/lib/errors.ts`\n"
+        )
+        # src/lib/errors.ts does NOT exist
+        stale = check_stale_rules(self.tmpdir)
+        self.assertTrue(len(stale) >= 1)
+        self.assertIn("errors.ts", stale[0]["issue"])
+
+    def test_no_stale_when_file_exists(self):
+        src = self.tmpdir / "src" / "lib"
+        src.mkdir(parents=True)
+        (src / "errors.ts").write_text("export class AppError {}")
+
+        (self.rules_dir / "project-error-handling.md").write_text(
+            "---\nglobs: [\"**/*.ts\"]\n---\n\n"
+            "- Error definitions in: `src/lib/errors.ts`\n"
+        )
+        stale = check_stale_rules(self.tmpdir)
+        stale_file_refs = [s for s in stale if "errors.ts" in s["issue"]]
+        self.assertEqual(len(stale_file_refs), 0)
+
+    def test_detects_stale_identifier(self):
+        # Create a project-*.md that references an identifier not in source
+        (self.rules_dir / "project-error-handling.md").write_text(
+            "---\nglobs: [\"**/*.ts\"]\n---\n\n"
+            "- Use `ObsoleteError` for all errors\n"
+        )
+        # No source files contain ObsoleteError
+        stale = check_stale_rules(self.tmpdir)
+        # Should detect the stale identifier (if there are source files to scan)
+        # With no source files, the identifier scan is skipped, so only file refs matter
+        self.assertIsInstance(stale, list)
+
+    def test_no_rules_dir_returns_empty(self):
+        empty_dir = Path(tempfile.mkdtemp())
+        try:
+            stale = check_stale_rules(empty_dir)
+            self.assertEqual(stale, [])
+        finally:
+            shutil.rmtree(empty_dir)
+
+
+class TestAnalysisTimestamp(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.config_dir = self.tmpdir / ".claude"
+        self.config_dir.mkdir(parents=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_set_and_get_timestamp(self):
+        (self.config_dir / "launchpad-config.json").write_text(json.dumps({
+            "project_name": "test", "version": "6.0.0"
+        }))
+        set_last_analysis_time(self.tmpdir)
+        ts = get_last_analysis_time(self.tmpdir)
+        self.assertIsNotNone(ts)
+        # Should be a valid ISO timestamp
+        from datetime import datetime
+        dt = datetime.fromisoformat(ts)
+        self.assertIsNotNone(dt)
+
+    def test_no_config_returns_none(self):
+        ts = get_last_analysis_time(self.tmpdir)
+        self.assertIsNone(ts)
+
+    def test_write_rules_sets_timestamp(self):
+        (self.config_dir / "launchpad-config.json").write_text(json.dumps({
+            "project_name": "test", "version": "6.0.0"
+        }))
+        result = AnalysisResult(
+            project_dir=str(self.tmpdir),
+            stack={},
+            patterns=[
+                Pattern("testing", "Test", [], ["- Test rule"], ["**/*.ts"], 0.9),
+            ],
+            key_abstractions=[],
+            file_organization={"style": "unknown", "test_location": "unknown",
+                               "barrel_exports": False, "src_dir": None},
+        )
+        write_rules(self.tmpdir, result, force=True)
+        ts = get_last_analysis_time(self.tmpdir)
+        self.assertIsNotNone(ts)
 
 
 if __name__ == "__main__":

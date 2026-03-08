@@ -17,6 +17,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 # ── Data Structures ──────────────────────────────────────────────────────
@@ -890,6 +891,169 @@ def generate_rules_from_analysis(result: AnalysisResult) -> list:
     return rules
 
 
+# ── Feedback Loop ───────────────────────────────────────────────────
+
+# Map keywords in learned corrections to pattern categories
+CATEGORY_KEYWORDS = {
+    "error-handling": ["error", "exception", "throw", "catch", "try", "apperror", "httperror"],
+    "auth": ["auth", "login", "token", "session", "permission", "role", "middleware", "jwt"],
+    "validation": ["valid", "schema", "zod", "yup", "joi", "pydantic", "input", "sanitize"],
+    "data-fetching": ["fetch", "query", "usequery", "useswr", "trpc", "api call", "server action"],
+    "state-management": ["state", "store", "zustand", "redux", "jotai", "atom"],
+    "testing": ["test", "mock", "fixture", "jest", "vitest", "pytest", "spec", "assert"],
+    "api": ["endpoint", "route", "controller", "handler", "response", "pagination", "rest"],
+    "database": ["database", "db", "query", "repository", "orm", "prisma", "migration", "model"],
+}
+
+
+def match_correction_to_category(correction: str) -> str | None:
+    """Match a learned correction to a pattern category by keyword overlap."""
+    text = correction.lower()
+    best_category = None
+    best_score = 0
+    for category, keywords in CATEGORY_KEYWORDS.items():
+        score = sum(1 for kw in keywords if kw in text)
+        if score > best_score:
+            best_score = score
+            best_category = category
+    return best_category if best_score > 0 else None
+
+
+def incorporate_learned(result: AnalysisResult, project_dir: Path) -> AnalysisResult:
+    """Enhance analysis results with learned corrections from learn.py.
+
+    Reads .claude/learn-log.json and matches corrections to detected pattern
+    categories. Adds matched corrections as extra rule lines to existing patterns,
+    or creates new patterns for unmatched categories.
+    """
+    log_path = project_dir / ".claude" / "learn-log.json"
+    if not log_path.exists():
+        return result
+
+    try:
+        log = json.loads(log_path.read_text())
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return result
+
+    if not log:
+        return result
+
+    # Group corrections by matched category (deduplicate)
+    by_category: dict[str | None, list[str]] = {}
+    seen_corrections: set[str] = set()
+    for entry in log:
+        correction = entry.get("correction", "")
+        if not correction or correction in seen_corrections:
+            continue
+        seen_corrections.add(correction)
+        category = match_correction_to_category(correction)
+        by_category.setdefault(category, []).append(correction)
+
+    # Build index of existing pattern categories
+    existing_categories = {p.category for p in result.patterns}
+
+    for category, corrections in by_category.items():
+        if category is None:
+            continue
+
+        if category in existing_categories:
+            # Append learned corrections to existing pattern's rule lines
+            for p in result.patterns:
+                if p.category == category:
+                    for correction in corrections:
+                        rule = correction if correction.startswith("- ") else f"- {correction}"
+                        if rule not in p.rule_lines:
+                            p.rule_lines.append(f"{rule} *(learned)*")
+                    break
+        else:
+            # Create new pattern from learned corrections
+            rule_lines = []
+            for correction in corrections:
+                rule = correction if correction.startswith("- ") else f"- {correction}"
+                rule_lines.append(f"{rule} *(learned)*")
+            result.patterns.append(Pattern(
+                category=category,
+                description=f"{category.replace('-', ' ').title()} (from learned corrections)",
+                evidence=[],
+                rule_lines=rule_lines,
+                globs=["**/*"],
+                confidence=0.6,
+            ))
+
+    return result
+
+
+def check_stale_rules(project_dir: Path) -> list[dict]:
+    """Check if project-*.md rules reference files/patterns that no longer exist.
+
+    Returns list of {file, issue, suggestion} dicts.
+    """
+    stale = []
+    rules_dir = project_dir / ".claude" / "rules"
+    if not rules_dir.exists():
+        return stale
+
+    for rf in rules_dir.glob("project-*.md"):
+        try:
+            content = rf.read_text()
+        except UnicodeDecodeError:
+            continue
+
+        # Check backtick-quoted file paths like `src/lib/errors.ts`
+        referenced_files = re.findall(r'`([a-zA-Z0-9_./-]+\.[a-zA-Z]+)`', content)
+        for ref in referenced_files:
+            ref_path = project_dir / ref
+            if not ref_path.exists() and not any(c in ref for c in ['*', '?', '{']):
+                stale.append({
+                    "file": rf.name,
+                    "issue": f"References `{ref}` which no longer exists",
+                    "suggestion": f"Re-run analyzer to update {rf.name}",
+                })
+
+        # Check backtick-quoted identifiers like `AppError` — verify they exist in source
+        identifiers = re.findall(r'`([A-Z][a-zA-Z]+(?:Error|Service|Client|Repository|Handler|Manager))`', content)
+        if identifiers:
+            # Quick scan: do these identifiers still exist in the codebase?
+            source_files = collect_source_files(project_dir)
+            all_content = ""
+            for sf in source_files[:100]:  # limit scan
+                all_content += read_file_safe(sf)
+            for ident in identifiers:
+                if ident not in all_content:
+                    stale.append({
+                        "file": rf.name,
+                        "issue": f"References `{ident}` which was not found in codebase",
+                        "suggestion": f"Re-run analyzer to update {rf.name}",
+                    })
+
+    return stale
+
+
+def get_last_analysis_time(project_dir: Path) -> str | None:
+    """Read last_analysis timestamp from launchpad-config.json."""
+    config_path = project_dir / ".claude" / "launchpad-config.json"
+    if not config_path.exists():
+        return None
+    try:
+        config = json.loads(config_path.read_text())
+        return config.get("last_analysis")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+
+
+def set_last_analysis_time(project_dir: Path):
+    """Record current time as last_analysis in launchpad-config.json."""
+    config_path = project_dir / ".claude" / "launchpad-config.json"
+    if not config_path.exists():
+        return
+    try:
+        config = json.loads(config_path.read_text())
+        config["last_analysis"] = datetime.now().isoformat()
+        config_path.write_text(json.dumps(config, indent=2) + "\n")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        pass
+
+
 # ── Output ───────────────────────────────────────────────────────────────
 
 def format_report(result: AnalysisResult) -> str:
@@ -953,6 +1117,9 @@ def write_rules(project_dir: Path, result: AnalysisResult, force: bool = False) 
         created.append(f".claude/rules/{name}.md")
         print(f"  Created {fp.name}")
 
+    # Record analysis timestamp
+    set_last_analysis_time(project_dir)
+
     return created
 
 
@@ -964,6 +1131,10 @@ def main():
     p.add_argument("--write-rules", action="store_true", help="Write rule files to .claude/rules/")
     p.add_argument("--json", action="store_true", help="JSON output")
     p.add_argument("--force", action="store_true", help="Overwrite existing rule files")
+    p.add_argument("--incorporate-learned", action="store_true", dest="incorporate_learned",
+                   help="Enhance analysis with learned corrections from /learn")
+    p.add_argument("--check-stale", action="store_true", dest="check_stale",
+                   help="Check for stale project-*.md rules")
     args = p.parse_args()
 
     project_dir = Path(args.project_dir).resolve()
@@ -971,7 +1142,23 @@ def main():
         print(f"Error: {project_dir} does not exist", file=sys.stderr)
         sys.exit(1)
 
+    if args.check_stale:
+        stale = check_stale_rules(project_dir)
+        if args.json:
+            print(json.dumps(stale, indent=2))
+        elif stale:
+            print(f"Found {len(stale)} stale references in analyzer rules:\n")
+            for s in stale:
+                print(f"  {s['file']}: {s['issue']}")
+                print(f"    → {s['suggestion']}")
+        else:
+            print("No stale references found in analyzer rules.")
+        sys.exit(0)
+
     result = analyze(project_dir)
+
+    if args.incorporate_learned:
+        result = incorporate_learned(result, project_dir)
 
     if args.json:
         output = {

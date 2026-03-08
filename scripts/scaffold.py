@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-claude-launchpad scaffold script v5.0.0
+claude-launchpad scaffold script v6.0.0
 
 Creates the .claude/ configuration directory with agents, rules, hooks, skills,
 commands, and supporting files — all with real values from the interview.
@@ -269,6 +269,24 @@ Record this as a learned rule so Claude doesn't repeat the mistake:
 These rules persist across sessions and get more specific over time.
 To remove a learned rule: run learn script with --forget "<query>"
 To analyze git history for corrections: run learn script with --from-git
+"""
+
+
+def cmd_evolve():
+    return """---
+description: Re-analyze codebase, merge learned corrections, update rules, audit
+---
+
+Evolve the project's Claude Code configuration:
+
+1. **Check stale rules**: Run analyzer with --check-stale to find outdated references
+2. **Re-analyze**: Run analyzer with --incorporate-learned --write-rules --force
+   This re-scans the codebase AND merges learned corrections into rules
+3. **Audit**: Run the auditor to verify the updated config
+4. **Report**: Show what changed — new patterns, incorporated corrections, stale rules fixed
+
+This closes the feedback loop: corrections you taught Claude via /learn
+get baked into the analyzer's rules, so they apply to new code automatically.
 """
 
 
@@ -1532,6 +1550,7 @@ def scaffold(args):
         "status": cmd_status(), "handoff": cmd_handoff(),
         "new-feature": cmd_new_feature(), "fix-bug": cmd_fix_bug(), "audit": cmd_audit(),
         "build": cmd_build(), "analyze": cmd_analyze(), "learn": cmd_learn(),
+        "evolve": cmd_evolve(),
     }
     if args.tdd:
         commands["tdd"] = cmd_tdd()
@@ -1726,6 +1745,7 @@ def scaffold(args):
         "migrate_cmd": getattr(args, 'migrate_cmd', None),
         "scaffolded_at": datetime.now().isoformat(),
         "version": VERSION,
+        "last_analysis": datetime.now().isoformat() if getattr(args, 'analyze', False) else None,
     }
     config_path = project_dir / ".claude" / "launchpad-config.json"
     if not dry_run:

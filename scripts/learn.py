@@ -100,6 +100,11 @@ def capture_correction(project_dir: Path, correction: str, context: str = "") ->
     save_learn_log(project_dir, log)
     regenerate_learned_rules(project_dir, log)
 
+    # Check if re-analysis is recommended
+    suggestion = suggest_reanalysis(project_dir)
+    if suggestion:
+        entry["reanalysis_suggestion"] = suggestion
+
     return entry
 
 
@@ -243,6 +248,60 @@ def forget(project_dir: Path, query: str) -> int:
     return removed
 
 
+# ── Feedback Loop ───────────────────────────────────────────────────
+
+REANALYSIS_THRESHOLD = 5  # Suggest re-analysis after this many corrections
+REANALYSIS_DAYS = 30      # Suggest re-analysis after this many days
+
+
+def suggest_reanalysis(project_dir: Path) -> str | None:
+    """Check if re-analysis should be suggested. Returns suggestion string or None."""
+    log = load_learn_log(project_dir)
+    if not log:
+        return None
+
+    # Check correction count since last analysis
+    config_path = project_dir / ".claude" / "launchpad-config.json"
+    last_analysis = None
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text())
+            last_analysis = config.get("last_analysis")
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass
+
+    # Count corrections since last analysis
+    corrections_since = 0
+    if last_analysis:
+        for entry in log:
+            entry_ts = entry.get("timestamp", "")
+            if entry_ts > last_analysis:
+                corrections_since += 1
+    else:
+        corrections_since = len(log)
+
+    reasons = []
+
+    if corrections_since >= REANALYSIS_THRESHOLD:
+        reasons.append(f"{corrections_since} corrections recorded since last analysis")
+
+    if last_analysis:
+        try:
+            last_dt = datetime.fromisoformat(last_analysis)
+            days_ago = (datetime.now() - last_dt).days
+            if days_ago >= REANALYSIS_DAYS:
+                reasons.append(f"last analysis was {days_ago} days ago")
+        except (ValueError, TypeError):
+            pass
+    elif len(log) > 0:
+        # No analysis has ever been run but corrections exist
+        reasons.append("codebase has never been analyzed")
+
+    if reasons:
+        return f"Consider re-analyzing: {'; '.join(reasons)}. Run /evolve to update rules."
+    return None
+
+
 # ── CLI ──────────────────────────────────────────────────────────────────
 
 def main():
@@ -271,6 +330,8 @@ def main():
         else:
             print(f"Learned: {args.capture}")
             print(f"  Saved to {LEARNED_RULES_FILE}")
+            if entry.get("reanalysis_suggestion"):
+                print(f"\n  Tip: {entry['reanalysis_suggestion']}")
 
     elif args.from_git:
         corrections = analyze_git_corrections(project_dir, args.max_commits)

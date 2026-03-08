@@ -25,6 +25,7 @@ from audit import (
     check_settings,
     check_skills_content,
     check_staleness,
+    check_stale_analyzer_rules,
     check_total_budget,
     count_lines,
     estimate_tokens,
@@ -751,6 +752,74 @@ class TestCheckContextPercentage(unittest.TestCase):
         # 1 server × 3000 + 500 = 3500 tokens = 1.75%
         issues = [i for i in r.issues if "context" in i["message"].lower()]
         self.assertEqual(len(issues), 0)
+
+
+class TestCheckStaleAnalyzerRules(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.rules_dir = self.tmpdir / ".claude" / "rules"
+        self.rules_dir.mkdir(parents=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_detects_stale_file_reference(self):
+        (self.rules_dir / "project-error-handling.md").write_text(
+            "---\nglobs: [\"**/*.ts\"]\n---\n\n"
+            "- Error definitions in: `src/lib/errors.ts`\n"
+        )
+        r = AuditResult()
+        check_stale_analyzer_rules(self.tmpdir, r)
+        stale_issues = [i for i in r.issues if "no longer exists" in i["message"]]
+        self.assertTrue(len(stale_issues) >= 1)
+
+    def test_no_issue_when_file_exists(self):
+        src = self.tmpdir / "src" / "lib"
+        src.mkdir(parents=True)
+        (src / "errors.ts").write_text("export class AppError {}")
+
+        (self.rules_dir / "project-error-handling.md").write_text(
+            "---\nglobs: [\"**/*.ts\"]\n---\n\n"
+            "- Error definitions in: `src/lib/errors.ts`\n"
+        )
+        r = AuditResult()
+        check_stale_analyzer_rules(self.tmpdir, r)
+        stale_issues = [i for i in r.issues if "no longer exists" in i["message"]]
+        self.assertEqual(len(stale_issues), 0)
+
+    def test_detects_old_analysis(self):
+        (self.tmpdir / ".claude" / "launchpad-config.json").write_text(json.dumps({
+            "version": "6.0.0",
+            "last_analysis": "2024-01-01T00:00:00",
+        }))
+        (self.rules_dir / "project-testing.md").write_text(
+            "---\nglobs: [\"**/*.ts\"]\n---\n\n- Test rule\n"
+        )
+        r = AuditResult()
+        check_stale_analyzer_rules(self.tmpdir, r)
+        old_issues = [i for i in r.issues if "days old" in i["message"]]
+        self.assertTrue(len(old_issues) >= 1)
+
+    def test_no_rules_dir_no_crash(self):
+        empty = Path(tempfile.mkdtemp())
+        try:
+            r = AuditResult()
+            check_stale_analyzer_rules(empty, r)
+            self.assertEqual(len(r.issues), 0)
+        finally:
+            shutil.rmtree(empty)
+
+    def test_suggests_evolve(self):
+        (self.rules_dir / "project-auth.md").write_text(
+            "---\nglobs: [\"**/*.ts\"]\n---\n\n"
+            "- Auth pattern: `nonexistent/auth.ts`\n"
+        )
+        r = AuditResult()
+        check_stale_analyzer_rules(self.tmpdir, r)
+        # Fix suggestion should mention /evolve
+        for issue in r.issues:
+            if issue.get("fix"):
+                self.assertIn("evolve", issue["fix"].lower())
 
 
 if __name__ == "__main__":

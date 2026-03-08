@@ -169,6 +169,16 @@ The `/build` command runs the full development pipeline with context passing thr
 
 Each agent receives the output of the previous one. The blueprint is the shared context.
 
+### Feedback Loop (`/evolve`)
+
+The analyzer, learning system, and audit are connected in a closed loop:
+
+```
+Analyze → Rules → Claude works → Developer corrects → /learn → /evolve → Updated rules
+```
+
+Say **"/evolve"** to re-analyze your codebase with learned corrections merged in. The auditor also detects staleness automatically — if analyzer rules reference deleted files or the analysis is >60 days old, it flags warnings suggesting `/evolve`.
+
 ### Token-Optimized
 
 Strict line limits keep your config lean: CLAUDE.md ≤100 lines, agents ≤30 lines, rules ≤20 lines. After scaffolding, Launchpad shows the estimated token impact on your context window.
@@ -232,9 +242,11 @@ Key flags:
 
 The analyzer:
 ```bash
-python scripts/analyze.py /path/to/project                # Print analysis report
-python scripts/analyze.py /path/to/project --write-rules  # Write rule files
-python scripts/analyze.py /path/to/project --json          # JSON output
+python scripts/analyze.py /path/to/project                          # Print analysis report
+python scripts/analyze.py /path/to/project --write-rules            # Write rule files
+python scripts/analyze.py /path/to/project --incorporate-learned     # Merge learned corrections
+python scripts/analyze.py /path/to/project --check-stale            # Find stale rule references
+python scripts/analyze.py /path/to/project --json                   # JSON output
 ```
 
 The learning system:
@@ -256,7 +268,7 @@ python scripts/audit.py /path/to/project --json        # JSON output
 ## Development
 
 ```bash
-# Run all tests (264 tests, stdlib only)
+# Run all tests (292 tests, stdlib only)
 cd scripts/
 python -m pytest test_scaffold.py test_audit.py test_analyze.py test_learn.py -v
 ```

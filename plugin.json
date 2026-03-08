@@ -19,7 +19,8 @@
     "bootstrap", "scaffold", "set up Claude Code", "init project",
     "start a project", "new app", "create a project", "project setup",
     "audit my config", "check my claude setup", "optimize my claude config",
-    "analyze my codebase", "learn from my corrections", "build feature"
+    "analyze my codebase", "learn from my corrections", "build feature",
+    "evolve my config", "update my rules"
   ],
   "capabilities": [
     "scaffold",
@@ -35,7 +36,8 @@
     "upgrade",
     "analyze",
     "learn",
-    "orchestration"
+    "orchestration",
+    "evolve"
   ],
   "stacks": [
     "nextjs", "react-vite", "vue", "sveltekit",

@@ -277,6 +277,40 @@ Over time, these rules become a distilled record of project-specific preferences
 
 ---
 
+## Evolve Mode (Feedback Loop)
+
+The `/evolve` command closes the feedback loop between analyzer, learning system, and audit:
+
+```
+Analyze → Rules → Claude works → Developer corrects → /learn → /evolve → Updated rules
+```
+
+### How it works
+
+1. **Check stale rules**: Finds project-*.md rules referencing deleted files or renamed identifiers
+2. **Re-analyze with learned corrections**: Runs the analyzer with `--incorporate-learned --write-rules --force`
+   - Re-scans the codebase for current patterns
+   - Reads `.claude/learn-log.json` and matches corrections to pattern categories
+   - Learned corrections appear in rules with `*(learned)*` markers
+3. **Audit**: Verifies the updated config scores well
+4. **Report**: Shows what changed
+
+### Running evolve
+
+```bash
+# Via slash command
+/evolve
+
+# Or manually
+python <skill-path>/scripts/analyze.py <project-root> --check-stale
+python <skill-path>/scripts/analyze.py <project-root> --incorporate-learned --write-rules --force
+python <skill-path>/scripts/audit.py <project-root>
+```
+
+The auditor also detects staleness automatically — if project-*.md rules reference files that no longer exist or if the analysis is >60 days old, it flags warnings suggesting `/evolve`.
+
+---
+
 ## Audit Mode
 
 The Config Auditor works on ANY .claude/ setup — not just Launchpad-generated ones.

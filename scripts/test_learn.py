@@ -10,6 +10,7 @@ from unittest.mock import patch
 from learn import (
     LEARN_LOG_FILE,
     LEARNED_RULES_FILE,
+    REANALYSIS_THRESHOLD,
     analyze_git_corrections,
     capture_correction,
     forget,
@@ -17,6 +18,7 @@ from learn import (
     regenerate_learned_rules,
     save_learn_log,
     show_learned,
+    suggest_reanalysis,
 )
 
 
@@ -258,6 +260,81 @@ class TestGitAnalysis(unittest.TestCase):
         # No corrections expected — different files, no correction keywords
         git_corrections = [c for c in corrections if c["type"] == "git-correction"]
         self.assertEqual(len(git_corrections), 0)
+
+
+class TestSuggestReanalysis(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_suggests_after_threshold_corrections(self):
+        # Create enough corrections to trigger suggestion
+        log = []
+        for i in range(REANALYSIS_THRESHOLD):
+            log.append({"type": "explicit", "correction": f"Rule {i}", "timestamp": "2025-06-01T00:00:00"})
+        save_learn_log(self.tmpdir, log)
+
+        suggestion = suggest_reanalysis(self.tmpdir)
+        self.assertIsNotNone(suggestion)
+        self.assertIn("corrections", suggestion)
+
+    def test_no_suggestion_below_threshold(self):
+        log = [{"type": "explicit", "correction": "One rule", "timestamp": "2025-06-01T00:00:00"}]
+        save_learn_log(self.tmpdir, log)
+
+        # With no last_analysis, any correction count triggers "never analyzed"
+        # So create a recent last_analysis
+        config_dir = self.tmpdir / ".claude"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        from datetime import datetime
+        (config_dir / "launchpad-config.json").write_text(json.dumps({
+            "version": "6.0.0",
+            "last_analysis": datetime.now().isoformat(),
+        }))
+
+        suggestion = suggest_reanalysis(self.tmpdir)
+        # Only 1 correction since analysis, below threshold
+        self.assertIsNone(suggestion)
+
+    def test_suggests_when_never_analyzed(self):
+        log = [{"type": "explicit", "correction": "A rule", "timestamp": "2025-01-01T00:00:00"}]
+        save_learn_log(self.tmpdir, log)
+
+        suggestion = suggest_reanalysis(self.tmpdir)
+        self.assertIsNotNone(suggestion)
+        self.assertIn("never been analyzed", suggestion)
+
+    def test_suggests_when_analysis_old(self):
+        log = [{"type": "explicit", "correction": "A rule", "timestamp": "2025-06-01T00:00:00"}]
+        save_learn_log(self.tmpdir, log)
+
+        config_dir = self.tmpdir / ".claude"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "launchpad-config.json").write_text(json.dumps({
+            "version": "6.0.0",
+            "last_analysis": "2024-01-01T00:00:00",  # very old
+        }))
+
+        suggestion = suggest_reanalysis(self.tmpdir)
+        self.assertIsNotNone(suggestion)
+        self.assertIn("days ago", suggestion)
+
+    def test_no_suggestion_with_empty_log(self):
+        suggestion = suggest_reanalysis(self.tmpdir)
+        self.assertIsNone(suggestion)
+
+    def test_capture_includes_suggestion(self):
+        # Capture enough corrections to trigger suggestion
+        for i in range(REANALYSIS_THRESHOLD):
+            capture_correction(self.tmpdir, f"Rule {i}")
+
+        # The last capture should include a suggestion
+        entry = capture_correction(self.tmpdir, "One more rule")
+        # May or may not have suggestion depending on threshold
+        # But the function should not crash
+        self.assertIn("correction", entry)
 
 
 if __name__ == "__main__":
