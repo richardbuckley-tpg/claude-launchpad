@@ -21,13 +21,13 @@ This installs Launchpad as a global Claude Code skill. Requires Python 3.10+ (st
 Open Claude Code in any project directory and say:
 
 ```
-"Bootstrap a new project"
+"Bootstrap this project using claude-launchpad"
 ```
 
 Launchpad asks you about your stack through a short conversation, then generates everything. Or skip the interview with a preset:
 
 ```
-"Bootstrap with the nextjs-fullstack preset"
+"Bootstrap with the nextjs-fullstack preset using claude-launchpad"
 ```
 
 ### 3. Start Building
@@ -131,7 +131,7 @@ The blueprint is the shared context between agents. Each step builds on the prev
 ### New Project (Full Interview)
 
 ```
-You: "Bootstrap a new project"
+You: "Bootstrap this project using claude-launchpad"
 Claude: Asks about your stack in 4 phases
 → Generates complete .claude/ config
 ```
@@ -139,7 +139,7 @@ Claude: Asks about your stack in 4 phases
 ### New Project (Preset)
 
 ```
-You: "Bootstrap with the fastapi preset"
+You: "Bootstrap with the fastapi preset using claude-launchpad"
 → Instant scaffolding, no questions
 ```
 
@@ -148,7 +148,7 @@ Available presets: `nextjs-fullstack`, `nextjs-supabase`, `react-express`, `fast
 ### Existing Project
 
 ```
-You: "Set up Claude Code for this project"
+You: "Set up Claude Code for this project using claude-launchpad"
 Claude: Analyzes your code first, asks about gaps
 → Project-specific rules based on your actual patterns
 ```
