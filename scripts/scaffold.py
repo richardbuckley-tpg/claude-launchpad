@@ -1091,6 +1091,7 @@ def get_hooks(args):
     # Auto-lint on source file edits (skip config/docs via jq + file extension check)
     # Claude Code pipes JSON to stdin: { "tool_input": { "file_path": "..." }, ... }
     # Falls back to running on all files if jq is not installed
+    # Guards ensure hooks silently pass when deps aren't installed yet (greenfield projects)
     SKIP_FILTER = (
         'if command -v jq >/dev/null 2>&1; then '
         'F=$(cat | jq -r \'.tool_input.file_path // empty\'); '
@@ -1098,13 +1099,23 @@ def get_hooks(args):
         'else cat >/dev/null; fi; '
     )
 
+    def _deps_guard(cmd):
+        """Return a shell guard that exits 0 if deps aren't installed yet."""
+        if cmd.startswith(('npm ', 'pnpm ', 'yarn ')):
+            return '[ -d node_modules ] || exit 0; '
+        if cmd.startswith('make '):
+            return '[ -f Makefile ] || exit 0; '
+        # For direct tool commands (ruff, pytest, mypy, go, cargo), check if available
+        tool = cmd.split()[0]
+        return f'command -v {tool} >/dev/null 2>&1 || exit 0; '
+
     lint_cmd = getattr(args, 'lint_cmd', None)
     if lint_cmd and SAFE_CMD_PATTERN.match(lint_cmd):
         post_hooks.append({
             "matcher": "Write|Edit",
             "hooks": [{
                 "type": "command",
-                "command": f"{SKIP_FILTER}{lint_cmd}"
+                "command": f"{SKIP_FILTER}{_deps_guard(lint_cmd)}{lint_cmd}"
             }]
         })
     elif lint_cmd:
@@ -1118,7 +1129,7 @@ def get_hooks(args):
             "matcher": "Write|Edit",
             "hooks": [{
                 "type": "command",
-                "command": f"{SKIP_FILTER}{test_cmd}"
+                "command": f"{SKIP_FILTER}{_deps_guard(test_cmd)}{test_cmd}"
             }]
         })
     elif args.tdd and test_cmd:
