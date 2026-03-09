@@ -40,12 +40,28 @@ Quick-reference for stack-specific patterns. Read the section matching the user'
 - **Mistakes**: Never put business logic in controllers. Never use `console.log`. Always validate ALL input. Never catch errors in routes — let them bubble.
 - **Rules target**: `src/routes/**/*.ts` (only route definitions + middleware), `src/services/**/*.ts` (no Express types, return typed results)
 
+### Node.js / Fastify
+- **Key paths**: `src/routes/`, `src/plugins/`, `src/services/`, `src/schemas/`, `src/hooks/`, `src/decorators/`
+- **Commands**: `npm run dev` (tsx watch), `npm run build` (tsc), `npm run test`, `npm run lint`
+- **Conventions**: Plugin architecture — register routes, hooks, and decorators as plugins. Use Fastify's built-in schema validation (JSON Schema/TypeBox) on every route. Encapsulate with `fastify.register()`. Structured logging built-in (pino). Use `fastify.decorate()` for shared utilities. Prefer `@fastify/autoload` for route registration.
+- **Mistakes**: Never use Express middleware directly (use `@fastify/express` adapter only when necessary). Never skip schema validation — it's free performance (serialization). Never mutate `request`/`reply` outside hooks. Always use async handlers (no callbacks).
+- **Testing**: `@fastify/inject` for in-process testing (no network overhead). Vitest or tap.
+- **Rules target**: `src/routes/**/*.ts` (must define JSON Schema for input/output), `src/plugins/**/*.ts` (must use fp pattern or `fastify-plugin`)
+
 ### Python / FastAPI
 - **Key paths**: `app/api/v1/`, `app/core/` (config, security), `app/models/`, `app/schemas/`, `app/services/`, `app/db/`
 - **Commands**: `uvicorn app.main:app --reload`, `pytest`, `ruff check .`, `ruff format .`, `mypy app/`
 - **Conventions**: Async everywhere. Pydantic for all schemas. `Depends()` for DI. Separate models (DB) from schemas (API). Type hints on everything.
 - **Mistakes**: Never return SQLAlchemy models directly. Never use sync DB operations. Always use `Depends()`. Never modify applied migrations. Never use `print()`.
 - **Rules target**: `app/api/**/*.py` (type-annotated Pydantic schemas, Depends for auth), `app/db/migrations/**/*.py` (never modify existing migrations)
+
+### Python / Django
+- **Key paths**: `manage.py`, `config/settings/`, `apps/` (or top-level app dirs), `templates/`, `static/`, `api/`
+- **Commands**: `python manage.py runserver`, `python manage.py test`, `ruff check .`, `python manage.py migrate`, `python manage.py makemigrations`
+- **Conventions**: Apps as self-contained modules. Fat models, thin views. Class-based views for CRUD, function views for custom logic. Django REST Framework for APIs. Settings split by environment (base/dev/prod). Custom user model from day one. Signals sparingly — prefer explicit calls.
+- **Mistakes**: Never put business logic in views (use model methods or services). Never use `select_related`/`prefetch_related` lazily (causes N+1). Never modify applied migrations. Never use `DEBUG=True` in production. Always use `get_user_model()` not direct User import.
+- **Testing**: `pytest-django` + factory_boy. Use `TestCase` for DB tests, `SimpleTestCase` for unit tests. `APITestCase` for DRF endpoints.
+- **Rules target**: `apps/*/views.py` (thin views, delegate to models/services), `apps/*/models.py` (validations, managers, no view logic), `apps/*/serializers.py` (DRF validation)
 
 ### Go
 - **Key paths**: `cmd/server/main.go`, `internal/handler/`, `internal/service/`, `internal/repository/`, `internal/model/`, `pkg/`

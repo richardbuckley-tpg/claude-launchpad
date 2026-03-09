@@ -371,6 +371,8 @@ def detect_stack(project_dir: Path) -> dict:
                 event_systems.append("nats")
             if "@aws-sdk/client-sqs" in deps or "@aws-sdk/client-eventbridge" in deps:
                 event_systems.append("aws-events")
+            if "ioredis" in deps and "bullmq" not in deps:
+                event_systems.append("redis-streams")
             if "@nestjs/microservices" in deps:
                 event_systems.append("nestjs-microservices")
             if event_systems:
@@ -457,6 +459,8 @@ def detect_stack(project_dir: Path) -> dict:
             if "boto3" in content:
                 # Check for specific AWS event services - we only flag if sqs/eventbridge specifically
                 pass  # Can't distinguish from generic boto3 usage
+            if "redis" in content and "redis-py" in content and "celery" not in content:
+                event_systems.append("redis-streams")
             if "apache-flink" in content or "pyflink" in content:
                 event_systems.append("flink")
             if "pyspark" in content:
@@ -508,6 +512,8 @@ def detect_stack(project_dir: Path) -> dict:
                 stack["workflow_orchestration"] = "temporal"
             if "nats.go" in go_mod_content or "nats-io/nats.go" in go_mod_content:
                 event_systems.append("nats")
+            if "go-redis" in go_mod_content and "bullmq" not in str(event_systems):
+                event_systems.append("redis-streams")
             if event_systems:
                 stack["event_systems"] = event_systems
         except (UnicodeDecodeError, FileNotFoundError):

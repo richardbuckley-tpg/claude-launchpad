@@ -1404,10 +1404,10 @@ class TestDomainBuildPipeline(unittest.TestCase):
         content = cmd_build(domain="finance", compliance=["sox"])
         self.assertIn("7.", content)
 
-    def test_build_has_6_steps_without_domain(self):
+    def test_build_has_7_steps_without_domain(self):
         content = cmd_build(domain="general", compliance=["none"])
-        self.assertIn("6.", content)
-        self.assertNotIn("7.", content)
+        self.assertIn("7.", content)  # Ship (pre-push added before ship)
+        self.assertNotIn("8.", content)
 
 
 class TestTddBuildPipeline(unittest.TestCase):

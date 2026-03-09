@@ -162,16 +162,17 @@ Follow the debugger methodology:
 6. **Verify**: Run full test suite
 """
 
-def cmd_audit():
-    return """---
+def cmd_audit(skill_path):
+    return f"""---
 description: Audit Claude Code config for health, token cost, and issues
 ---
 
 Run the Claude Launchpad auditor on this project:
-1. Run the audit script against the current project
+1. Run: `python3 {skill_path}/scripts/audit.py .`
 2. Display the health report with token estimates
 3. For each issue, suggest the specific fix
-4. If $ARGUMENTS contains "--fix", apply safe fixes automatically
+4. If $ARGUMENTS contains "--fix": `python3 {skill_path}/scripts/audit.py . --fix`
+5. For recommendations: `python3 {skill_path}/scripts/audit.py . --recommend`
 """
 
 def cmd_tdd():
@@ -204,6 +205,24 @@ Pipeline:
 5. **Review**: Code review (use reviewer agent)
 6. **Push**: Branch, commit, PR (use push agent)
 """
+
+def cmd_idea_to_prd():
+    return """---
+description: Research an idea and generate a PRD for /build
+---
+
+Idea: $ARGUMENTS
+
+Run `@idea-to-prd Research and write a PRD for "$ARGUMENTS"`
+
+The agent will:
+1. Research online for best practices and competitor features
+2. Generate a structured PRD in `docs/prds/`
+3. Present the PRD for your review
+
+Once approved, start building with: `/build <feature-name>` (reference the PRD)
+"""
+
 
 def cmd_build(domain="general", compliance=None, tdd=False):
     has_domain = domain != "general"
@@ -263,6 +282,10 @@ Feature: $ARGUMENTS
 
 Execute the full development pipeline with context passing through blueprints:
 
+0. **PRD** (optional): If a PRD exists in `docs/prds/` for this feature, read it first.
+   - The architect uses the PRD as input. If no PRD exists, skip this step.
+   - To create a PRD from an idea: `/idea-to-prd <idea>`
+
 1. **Design**: Run `@architect Design the "$ARGUMENTS" feature`
    - Wait for blueprint in `docs/blueprints/`
    - Review the blueprint and get approval before continuing
@@ -274,57 +297,60 @@ Execute the full development pipeline with context passing through blueprints:
 {review_num}. **Review**: Run `@reviewer Review all changes`
    - Must APPROVE before shipping
 
-{ship_num}. **Ship**: Run `@push Create PR for "$ARGUMENTS"`
+{ship_num}. **Pre-flight**: Run `@pre-push Run pre-push checks`
+   - Must be READY before shipping — fix any failures first
+
+{ship_num + 1}. **Ship**: Run `@push Create PR for "$ARGUMENTS"`
 
 Update `.claude/handoff.md` after completion.
 """
 
 
-def cmd_analyze():
-    return """---
+def cmd_analyze(skill_path):
+    return f"""---
 description: Analyze codebase and generate project-specific rules
 ---
 
 Analyze the codebase to detect patterns and generate targeted rules:
-1. Run the analyzer script against this project
+1. Run: `python3 {skill_path}/scripts/analyze.py .`
 2. Review detected patterns — stack, error handling, auth, validation, testing, etc.
-3. If patterns look correct, write rules with --write-rules
-4. Run the audit to verify the new rules
+3. If patterns look correct, write rules: `python3 {skill_path}/scripts/analyze.py . --write-rules`
+4. Run audit to verify: `python3 {skill_path}/scripts/audit.py .`
 5. Show what was generated
 
 This replaces generic framework rules with project-specific ones based on actual code.
 """
 
 
-def cmd_learn():
-    return """---
+def cmd_learn(skill_path):
+    return f"""---
 description: Record a correction for Claude to remember
 ---
 
 $ARGUMENTS
 
 Record this as a learned rule so Claude doesn't repeat the mistake:
-1. Run the learn script with --capture "$ARGUMENTS"
+1. Run: `python3 {skill_path}/scripts/learn.py . --capture "$ARGUMENTS"`
 2. Confirm the rule was saved to .claude/rules/learned.md
-3. Show all currently learned rules
+3. Show all currently learned rules: `python3 {skill_path}/scripts/learn.py . --show`
 
 These rules persist across sessions and get more specific over time.
-To remove a learned rule: run learn script with --forget "<query>"
-To analyze git history for corrections: run learn script with --from-git
+To remove a learned rule: `python3 {skill_path}/scripts/learn.py . --forget "<query>"`
+To analyze git history for corrections: `python3 {skill_path}/scripts/learn.py . --from-git`
 """
 
 
-def cmd_evolve():
-    return """---
+def cmd_evolve(skill_path):
+    return f"""---
 description: Re-analyze codebase, merge learned corrections, update rules, audit
 ---
 
 Evolve the project's Claude Code configuration:
 
-1. **Check stale rules**: Run analyzer with --check-stale to find outdated references
-2. **Re-analyze**: Run analyzer with --incorporate-learned --write-rules --force
+1. **Check stale rules**: `python3 {skill_path}/scripts/analyze.py . --check-stale`
+2. **Re-analyze**: `python3 {skill_path}/scripts/analyze.py . --incorporate-learned --write-rules --force`
    This re-scans the codebase AND merges learned corrections into rules
-3. **Audit**: Run the auditor to verify the updated config
+3. **Audit**: `python3 {skill_path}/scripts/audit.py .`
 4. **Report**: Show what changed — new patterns, incorporated corrections, stale rules fixed
 
 This closes the feedback loop: corrections you taught Claude via /learn
@@ -340,6 +366,7 @@ def get_skills(args):
     fe = args.frontend
     be = args.backend
     db = args.database
+    orm = getattr(args, 'orm', 'none') or 'none'
 
     # Always generated
     skills.append(("simplify", f"""---
@@ -455,19 +482,30 @@ Verify: Status codes correct. Auth applied. Tests cover happy + error paths.
 """))
 
     # Database skills
+    orm_label = STACK_LABELS.get(orm, orm) if orm and orm != "none" else "your ORM"
     if db and db != "none":
+        if orm in ("prisma", "drizzle"):
+            type_step = "6. Export TypeScript types (Prisma generates, Drizzle infers from schema)"
+        elif orm in ("sqlalchemy",):
+            type_step = "6. Add Pydantic schemas for API layer (separate from SQLAlchemy models)"
+        elif orm in ("mongoose",):
+            type_step = "6. Add TypeScript interfaces matching the Mongoose schema"
+        elif orm in ("activerecord",):
+            type_step = "6. Add serializer for API responses"
+        else:
+            type_step = "6. Add types/schemas for the model"
         skills.append(("generate-model", f"""---
-description: Define a database model with migration and seed data
+description: Define a {orm_label} model with migration and seed data
 ---
 
 Create model: $ARGUMENTS
 
-1. Check ORM/schema tool in project
-2. Define schema with proper types and constraints
+1. Check existing models in project for naming conventions
+2. Define {orm_label} schema with proper types and constraints
 3. Add relationships to existing models if needed
-4. Generate migration
+4. Generate migration{' (`' + (getattr(args, 'migrate_cmd', None) or '') + '`)' if getattr(args, 'migrate_cmd', None) else ''}
 5. Create seed data
-6. Add TypeScript types / Python dataclasses
+{type_step}
 7. Create basic CRUD query layer
 
 Anti-patterns: Don't skip migrations. Don't create models without relationships to existing schema.
@@ -1269,6 +1307,8 @@ Rules:
             event_checks.append("Celery: task_acks_late? JSON serializer? Time limits set? No ORM objects as args?")
         if "temporal" in event_systems:
             event_checks.append("Temporal: workflow code deterministic? No I/O in workflows? Activities handle all side effects?")
+        if "redis-streams" in event_systems:
+            event_checks.append("Redis Streams: MAXLEN/MINID trimming configured? XACK after processing? XAUTOCLAIM for stale messages?")
         checks_str = "\n".join(f"   - {c}" for c in event_checks) if event_checks else "   - Technology-specific best practices"
 
         agents.append(("reliability-auditor", f"""---
@@ -1292,6 +1332,107 @@ Rules:
 - NEVER approve consumers without idempotency checks
 - NEVER approve queues without dead letter configuration
 - STOP if messages can be silently lost — this is a data loss risk
+"""))
+
+    # idea-to-prd — always
+    agents.append(("idea-to-prd", f"""---
+name: idea-to-prd
+description: Researches an idea and generates a detailed PRD
+tools: [Read, Glob, Grep, Bash, Write, WebSearch, WebFetch]
+model: opus
+---
+
+You are a product strategist for a {fe}/{be} project.
+
+1. Take the idea and clarify scope — ask 2-3 questions if ambiguous
+2. Research online: competitor features, best practices, common pitfalls
+3. Identify must-have vs nice-to-have requirements
+4. Write PRD to docs/prds/{{feature-name}}.md
+
+PRD format:
+- **Problem Statement**: What problem does this solve? Who has it?
+- **Target Users**: Who benefits? What's their current workflow?
+- **Competitive Analysis**: How do leading products handle this? (cite sources)
+- **Requirements**: Must-have (MVP) and Nice-to-have (v2) — each with acceptance criteria
+- **User Stories**: As a [user], I want [action], so that [outcome]
+- **Technical Constraints**: What the architecture supports/limits (read ARCHITECTURE.md)
+- **Success Metrics**: How do we know this worked?
+- **Open Questions**: Decisions that need human input
+
+Rules:
+- ALWAYS research before writing — don't generate requirements from assumptions
+- Include specific acceptance criteria for every requirement (testable, not vague)
+- Read ARCHITECTURE.md and CLAUDE.md to understand technical constraints
+- Do NOT design the solution — that's the architect's job
+- STOP if the idea conflicts with the project's core architecture — flag it
+"""))
+
+    # pre-push — always
+    agents.append(("pre-push", f"""---
+name: pre-push
+description: Comprehensive pre-flight check before pushing code
+tools: [Bash, Read, Grep, Glob]
+model: sonnet
+---
+
+Run the full pre-push checklist for {fe}/{be} stack:
+
+1. **Lint**: `{lint_cmd}` — must pass clean
+2. **Type check**: Run type checker if available (tsc --noEmit, mypy, etc.)
+3. **Tests**: `{test_cmd}` — all must pass
+4. **Build**: `{build_cmd}` — must compile without errors
+5. **Debug code**: Scan for console.log, debugger, print(), TODO, FIXME, XXX, @hack
+6. **Secrets scan**: Check staged files for API keys, tokens, passwords, connection strings
+7. **Large files**: Flag any staged file >500KB
+8. **Git status**: No untracked files that should be committed, no merge conflicts
+9. **Dependencies**: No mismatched lock file (package-lock.json matches package.json)
+
+Output: READY / NOT READY with a checklist showing pass/fail per item.
+
+Rules:
+- Run ALL checks even if early ones fail — report everything at once
+- NEVER skip the secrets scan
+- Flag warnings (TODOs, large files) but only block on errors (lint, test, build, secrets)
+- STOP and report — do NOT fix issues, just identify them
+"""))
+
+    # dev-ops — always
+    hosting = getattr(args, 'hosting', 'none') or 'none'
+    agents.append(("dev-ops", f"""---
+name: dev-ops
+description: Recommends infrastructure and generates starter deployment configs
+tools: [Read, Glob, Grep, Bash, Write, WebSearch, WebFetch]
+model: opus
+---
+
+You are a DevOps engineer advising a {fe}/{be}/{db} project (hosting: {hosting}).
+
+1. Read ARCHITECTURE.md, CLAUDE.md, and package files to understand the stack
+2. Analyze requirements: expected traffic, data sensitivity, team size, budget constraints
+3. Propose infrastructure for three environments:
+   - **Local**: Docker Compose for dev environment (app + database + any services)
+   - **Staging** (if needed): lightweight, cost-optimized, mirrors production topology
+   - **Production**: right-sized for the stack, with monitoring and backups
+4. Write recommendation to `docs/infrastructure.md`
+5. Generate starter IaC files in `infrastructure/`:
+   - `docker-compose.yml` — local dev environment
+   - `docker-compose.staging.yml` — staging (if applicable)
+   - Terraform files for production (if cloud hosting)
+
+For each environment, document:
+- **Services**: what runs where
+- **Estimated cost**: monthly range (e.g., "$0/free tier", "$20-50/mo", "$200-500/mo")
+- **Scaling path**: what to change when traffic grows
+- **Trade-offs**: why this choice over alternatives
+
+Rules:
+- ALWAYS start with the simplest viable infrastructure — don't over-engineer
+- Include cost estimates — engineers need to justify spend
+- Docker Compose for local is non-negotiable — every project needs reproducible dev setup
+- Terraform for production cloud infra (not CloudFormation — Terraform is cloud-agnostic)
+- Generated IaC is a STARTING POINT — flag what needs customization before production use
+- Include health checks, logging, and backup configuration
+- STOP if requirements are unclear — ask before generating expensive infrastructure
 """))
 
     # ── Domain auditor agents ──
@@ -1602,6 +1743,8 @@ description: SQLAlchemy / Alembic conventions
             lines.append("- Celery: task_acks_late=True, never pass ORM objects as arguments, use JSON serializer (not pickle)")
         if "nats" in event_systems:
             lines.append("- NATS: distinguish Core (at-most-once) from JetStream (at-least-once), subject hierarchies mirror domain")
+        if "redis-streams" in event_systems:
+            lines.append("- Redis Streams: configure MAXLEN/MINID trimming, XACK processed messages, use XAUTOCLAIM for stale recovery")
 
         if schema_format != "none":
             lines.append(f"- Schema format: {schema_format} — enforce backward compatibility, test in CI")
@@ -1870,54 +2013,70 @@ def get_first_feature_guide(args):
     test_cmd = getattr(args, 'test_cmd', None) or "npm run test"
     lint_cmd = getattr(args, 'lint_cmd', None) or "npm run lint"
 
+    step = 1
     steps = [
         f"# First Feature Guide — {args.project_name}\n",
         "Follow these steps to build your first feature with Claude Code.\n",
-        "## 1. Plan",
+        f"## {step}. Plan",
         "```",
         "/new-feature <feature-name>",
         "```",
         "This creates a branch and presents a plan for approval.\n",
-        "## 2. Design",
+    ]
+    step += 1
+
+    steps.extend([
+        f"## {step}. Design",
         "Use the architect agent to produce a blueprint:",
         "```",
         "@architect Design the <feature-name> feature",
         "```",
         "Review the blueprint in `docs/blueprints/`.\n",
-    ]
+    ])
+    step += 1
 
     if fe and fe != "none":
         steps.extend([
-            "## 3. Build Frontend",
+            f"## {step}. Build Frontend",
             f"Use skills to scaffold {fe} components:",
             "```",
             "/generate-component <ComponentName>",
             "/generate-page <page-name>",
             "```\n",
         ])
+        step += 1
 
     if be and be not in ("none", "integrated"):
         steps.extend([
-            "## 4. Build API",
+            f"## {step}. Build API",
             f"Scaffold {be} endpoints:",
             "```",
             "/generate-endpoint <endpoint-name>",
             "```\n",
         ])
+        step += 1
 
     steps.extend([
-        "## 5. Test",
+        f"## {step}. Test",
         "Use the testing agent or TDD skill:",
         "```",
         f"@testing Write tests for <feature-name>",
         f"# or run: {test_cmd}",
         "```\n",
-        "## 6. Review & Push",
+    ])
+    step += 1
+
+    steps.extend([
+        f"## {step}. Review & Push",
         "```",
         "@reviewer Review my changes",
         "@push Create PR for <feature-name>",
         "```\n",
-        "## 7. Wrap Up",
+    ])
+    step += 1
+
+    steps.extend([
+        f"## {step}. Wrap Up",
         "```",
         "/handoff",
         "```",
@@ -1984,6 +2143,304 @@ def get_handoff(project_name):
 ## Architecture Decisions
 (Record key decisions here as the project evolves)
 """
+
+
+# ── CLAUDE.md & ARCHITECTURE.md generators ──────────────────────────────
+
+STACK_LABELS = {
+    "nextjs": "Next.js (App Router)", "react-vite": "React + Vite", "vue": "Vue 3 / Nuxt",
+    "sveltekit": "SvelteKit", "node-express": "Express", "node-fastify": "Fastify",
+    "python-fastapi": "FastAPI", "python-django": "Django", "go": "Go", "rust-actix": "Rust / Actix",
+    "ruby-rails": "Ruby on Rails", "integrated": "Integrated (Next.js/SvelteKit)",
+    "postgresql": "PostgreSQL", "mongodb": "MongoDB", "supabase": "Supabase", "sqlite": "SQLite",
+    "mysql": "MySQL", "dynamodb": "DynamoDB", "prisma": "Prisma", "drizzle": "Drizzle",
+    "sqlalchemy": "SQLAlchemy", "mongoose": "Mongoose", "typeorm": "TypeORM",
+    "sequelize": "Sequelize", "activerecord": "ActiveRecord",
+    "clerk": "Clerk", "nextauth": "NextAuth / Auth.js", "supabase-auth": "Supabase Auth",
+    "custom-jwt": "Custom JWT", "vercel": "Vercel", "railway": "Railway", "aws": "AWS",
+    "fly": "Fly.io", "self-hosted": "Self-hosted",
+}
+
+STACK_MISTAKES = {
+    "nextjs": [
+        'NEVER add "use client" at page level without a specific reason',
+        "NEVER import server code in client components",
+        "NEVER expose secrets without NEXT_PUBLIC_ prefix in client code",
+    ],
+    "react-vite": [
+        "NEVER store server state in Zustand — use React Query for server data",
+        "NEVER make API calls directly in components — use the API layer",
+    ],
+    "python-fastapi": [
+        "NEVER return SQLAlchemy models directly — use Pydantic schemas",
+        "NEVER use sync DB operations — async everywhere",
+    ],
+    "python-django": [
+        "NEVER put business logic in views — use model methods or service objects",
+        "NEVER import User directly — use get_user_model()",
+    ],
+    "go": [
+        "NEVER ignore errors — always handle or propagate with %w",
+        "NEVER use global state — pass dependencies explicitly",
+    ],
+    "prisma": [
+        "NEVER edit applied migrations — create new ones",
+        "ALWAYS run prisma generate after schema changes",
+    ],
+    "drizzle": [
+        "NEVER edit applied migrations — create new ones",
+    ],
+    "sqlalchemy": [
+        "NEVER modify existing Alembic migrations — create new revisions",
+    ],
+}
+
+
+def get_claude_md(args):
+    """Generate a real, filled-in CLAUDE.md from interview data."""
+    name = args.project_name
+    fe = args.frontend
+    be = args.backend
+    db = args.database
+    orm = getattr(args, 'orm', 'none') or 'none'
+    auth = args.auth or 'none'
+
+    dev_cmd = getattr(args, 'dev_cmd', None) or _default_cmd('dev', fe, be)
+    build_cmd = getattr(args, 'build_cmd', None) or _default_cmd('build', fe, be)
+    test_cmd = getattr(args, 'test_cmd', None) or _default_cmd('test', fe, be)
+    lint_cmd = getattr(args, 'lint_cmd', None) or _default_cmd('lint', fe, be)
+    migrate_cmd = getattr(args, 'migrate_cmd', None) or _default_cmd('migrate', fe, be, orm=orm)
+
+    lines = [f"# {name}", ""]
+
+    # Commands
+    lines.append("## Commands")
+    if dev_cmd:
+        lines.append(f"- Dev: `{dev_cmd}`")
+    if build_cmd:
+        lines.append(f"- Build: `{build_cmd}`")
+    if test_cmd:
+        lines.append(f"- Test: `{test_cmd}`")
+    if lint_cmd:
+        lines.append(f"- Lint: `{lint_cmd}`")
+    if migrate_cmd:
+        lines.append(f"- Migrate: `{migrate_cmd}`")
+    lines.append("")
+
+    # Tech stack
+    lines.append("## Tech Stack")
+    stack_parts = []
+    if fe and fe != "none":
+        stack_parts.append(f"**Frontend**: {STACK_LABELS.get(fe, fe)}")
+    if be and be != "none":
+        stack_parts.append(f"**Backend**: {STACK_LABELS.get(be, be)}")
+    if db and db != "none":
+        db_label = STACK_LABELS.get(db, db)
+        if orm and orm != "none":
+            db_label += f" + {STACK_LABELS.get(orm, orm)}"
+        stack_parts.append(f"**Database**: {db_label}")
+    if auth and auth != "none":
+        stack_parts.append(f"**Auth**: {STACK_LABELS.get(auth, auth)}")
+    hosting = getattr(args, 'hosting', 'none') or 'none'
+    if hosting != "none":
+        stack_parts.append(f"**Hosting**: {STACK_LABELS.get(hosting, hosting)}")
+    for part in stack_parts:
+        lines.append(f"- {part}")
+    lines.append("")
+
+    # Architecture
+    lines.append("## Architecture")
+    if be == "integrated":
+        lines.append(f"Monolith with {STACK_LABELS.get(fe, fe)} handling both frontend and API routes.")
+    elif be and be != "none" and fe and fe != "none":
+        lines.append(f"{STACK_LABELS.get(fe, fe)} frontend with {STACK_LABELS.get(be, be)} backend API.")
+    elif be and be != "none":
+        lines.append(f"{STACK_LABELS.get(be, be)} API service.")
+    if db and db != "none":
+        lines.append(f"Data in {STACK_LABELS.get(db, db)}" + (f" via {STACK_LABELS.get(orm, orm)}." if orm != "none" else "."))
+    if auth and auth != "none":
+        lines.append(f"Authentication via {STACK_LABELS.get(auth, auth)}.")
+    lines.append("")
+    lines.append("See [ARCHITECTURE.md](./ARCHITECTURE.md) for full design.")
+    lines.append("")
+
+    # Mistakes to avoid
+    mistakes = []
+    for key in (fe, be, orm):
+        if key and key != "none" and key in STACK_MISTAKES:
+            mistakes.extend(STACK_MISTAKES[key])
+    if mistakes:
+        lines.append("## Mistakes to Avoid")
+        for m in mistakes[:6]:  # Cap at 6 to stay lean
+            lines.append(f"- {m}")
+        lines.append("")
+
+    # Repository
+    lines.append("## Repository")
+    lines.append("- Branches: `feature/*`, `fix/*`, `chore/*`")
+    cc = getattr(args, 'conventional_commits', False)
+    lines.append(f"- Commits: {'Conventional Commits (feat/fix/refactor/test/docs/chore)' if cc else 'Descriptive messages'}")
+    lines.append("")
+
+    # Session management
+    lines.append("## Session Management")
+    lines.append("Run `/handoff` at end of each session. Run `/status` to resume.")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def _default_cmd(kind, fe, be, orm=None):
+    """Return a sensible default command based on stack."""
+    is_node = fe in ("nextjs", "react-vite", "vue", "sveltekit") or be in ("node-express", "node-fastify", "integrated")
+    is_python = be in ("python-fastapi", "python-django")
+    is_go = be == "go"
+    is_rust = be == "rust-actix"
+    is_ruby = be == "ruby-rails"
+
+    defaults = {
+        "dev": {True: "npm run dev", "python": "uvicorn app.main:app --reload", "django": "python manage.py runserver",
+                "go": "go run cmd/server/main.go", "rust": "cargo run", "ruby": "rails server"},
+        "build": {True: "npm run build", "go": "go build ./...", "rust": "cargo build --release", "ruby": None},
+        "test": {True: "npm run test", "python": "pytest", "django": "python manage.py test",
+                 "go": "go test ./...", "rust": "cargo test", "ruby": "rails test"},
+        "lint": {True: "npm run lint", "python": "ruff check .", "django": "ruff check .",
+                 "go": "golangci-lint run", "rust": "cargo clippy", "ruby": "bundle exec rubocop"},
+        "migrate": {"prisma": "npx prisma migrate dev", "drizzle": "npx drizzle-kit migrate",
+                     "sqlalchemy": "alembic upgrade head", "activerecord": "rails db:migrate"},
+    }
+
+    if kind == "migrate":
+        return defaults["migrate"].get(orm)
+
+    cmd_map = defaults.get(kind, {})
+    if is_python and be == "python-django":
+        return cmd_map.get("django")
+    if is_python:
+        return cmd_map.get("python")
+    if is_go:
+        return cmd_map.get("go")
+    if is_rust:
+        return cmd_map.get("rust")
+    if is_ruby:
+        return cmd_map.get("ruby")
+    if is_node:
+        return cmd_map.get(True)
+    return None
+
+
+def get_architecture_md(args):
+    """Generate a real, filled-in ARCHITECTURE.md from interview data."""
+    name = args.project_name
+    fe = args.frontend
+    be = args.backend
+    db = args.database
+    orm = getattr(args, 'orm', 'none') or 'none'
+    auth = args.auth or 'none'
+
+    fe_label = STACK_LABELS.get(fe, fe) if fe and fe != "none" else None
+    be_label = STACK_LABELS.get(be, be) if be and be != "none" else None
+    db_label = STACK_LABELS.get(db, db) if db and db != "none" else None
+    auth_label = STACK_LABELS.get(auth, auth) if auth != "none" else None
+    hosting_label = STACK_LABELS.get(getattr(args, 'hosting', 'none') or 'none', None)
+
+    lines = [f"# Architecture — {name}", ""]
+
+    # Overview
+    lines.append("## Overview")
+    parts = []
+    if fe_label and be == "integrated":
+        parts.append(f"Full-stack {fe_label} application with integrated API routes")
+    elif fe_label and be_label:
+        parts.append(f"{fe_label} frontend with {be_label} backend")
+    elif be_label:
+        parts.append(f"{be_label} API service")
+    if db_label:
+        orm_suffix = f" via {STACK_LABELS.get(orm, orm)}" if orm != "none" else ""
+        parts.append(f"{db_label}{orm_suffix} for persistence")
+    if auth_label:
+        parts.append(f"{auth_label} for authentication")
+    lines.append(". ".join(parts) + "." if parts else "")
+    lines.append("")
+
+    # Mermaid diagram
+    lines.append("## System Architecture")
+    lines.append("")
+    lines.append("```mermaid")
+    lines.append("graph LR")
+    if fe_label and be == "integrated":
+        lines.append(f'    Client["{fe_label}"] --> API["API Routes"]')
+    elif fe_label and be_label:
+        lines.append(f'    Client["{fe_label}"] --> API["{be_label}"]')
+    elif be_label:
+        lines.append(f'    Client["Client"] --> API["{be_label}"]')
+    if db_label:
+        lines.append(f'    API --> DB[("{db_label}")]')
+    if auth_label:
+        lines.append(f'    API --> Auth["{auth_label}"]')
+    lines.append("```")
+    lines.append("")
+
+    # Key decisions table
+    lines.append("## Key Decisions")
+    lines.append("")
+    lines.append("| Decision | Choice | Rationale |")
+    lines.append("|----------|--------|-----------|")
+    if fe_label:
+        lines.append(f"| Frontend | {fe_label} | |")
+    if be_label:
+        lines.append(f"| Backend | {be_label} | |")
+    if db_label:
+        lines.append(f"| Database | {db_label} | |")
+    if orm != "none":
+        lines.append(f"| ORM | {STACK_LABELS.get(orm, orm)} | |")
+    if auth_label:
+        lines.append(f"| Auth | {auth_label} | |")
+    if hosting_label:
+        lines.append(f"| Hosting | {hosting_label} | |")
+    lines.append("")
+
+    # Patterns
+    lines.append("## Patterns")
+    lines.append("")
+    lines.append("### Data Access")
+    if orm == "prisma":
+        lines.append("Prisma client for all database access. Models defined in `prisma/schema.prisma`.")
+    elif orm == "drizzle":
+        lines.append("Drizzle ORM for type-safe queries. Schema in `src/db/schema.ts`.")
+    elif orm == "sqlalchemy":
+        lines.append("SQLAlchemy async sessions with Alembic migrations. Models in `app/models/`.")
+    elif orm == "activerecord":
+        lines.append("ActiveRecord with Rails migrations. Models in `app/models/`.")
+    elif orm == "mongoose":
+        lines.append("Mongoose schemas with TypeScript interfaces. Models in `src/models/`.")
+    else:
+        lines.append("(Document your data access pattern here)")
+    lines.append("")
+
+    lines.append("### Error Handling")
+    lines.append("(Document your error handling strategy: custom error classes, centralized handler, what gets logged vs shown)")
+    lines.append("")
+
+    lines.append("### Authentication Flow")
+    if auth == "clerk":
+        lines.append("`clerkMiddleware()` protects routes. `auth()` in Server Components, `useUser()` in Client Components. Users synced via webhooks.")
+    elif auth == "nextauth":
+        lines.append("NextAuth.js with JWT strategy. Callbacks for custom session content. `signIn()`/`signOut()` server actions.")
+    elif auth == "supabase-auth":
+        lines.append("Supabase Auth with RLS policies. Server client for SSR, browser client for components.")
+    elif auth == "custom-jwt":
+        lines.append("Custom JWT with short-lived access tokens (15min) and refresh token rotation. httpOnly cookies for web.")
+    else:
+        lines.append("(Document your auth flow here)")
+    lines.append("")
+
+    # Environment
+    lines.append("## Environment Variables")
+    lines.append("See `.env.example` for the complete list.")
+    lines.append("")
+
+    return "\n".join(lines)
 
 
 # ── Main scaffold logic ─────────────────────────────────────────────────
@@ -2202,19 +2659,23 @@ def scaffold(args):
             d = project_dir / ".claude" / subdir
             if not d.exists():
                 d.mkdir(parents=True, exist_ok=True)
-        docs_dir = project_dir / "docs" / "blueprints"
-        if not docs_dir.exists():
-            docs_dir.mkdir(parents=True, exist_ok=True)
+        for docs_subdir in ("blueprints", "prds"):
+            docs_dir = project_dir / "docs" / docs_subdir
+            if not docs_dir.exists():
+                docs_dir.mkdir(parents=True, exist_ok=True)
     print("  Created .claude/ directory structure")
 
     # 2. Slash commands
+    skill_path = str(Path(__file__).resolve().parent.parent)
     cmds_dir = project_dir / ".claude" / "commands"
     commands = {
         "status": cmd_status(), "handoff": cmd_handoff(),
-        "new-feature": cmd_new_feature(), "fix-bug": cmd_fix_bug(), "audit": cmd_audit(),
+        "new-feature": cmd_new_feature(), "fix-bug": cmd_fix_bug(),
+        "idea-to-prd": cmd_idea_to_prd(),
+        "audit": cmd_audit(skill_path),
         "build": cmd_build(getattr(args, 'domain', 'general'), getattr(args, 'compliance', ['none']), args.tdd),
-        "analyze": cmd_analyze(), "learn": cmd_learn(),
-        "evolve": cmd_evolve(),
+        "analyze": cmd_analyze(skill_path), "learn": cmd_learn(skill_path),
+        "evolve": cmd_evolve(skill_path),
     }
     if args.tdd:
         commands["tdd"] = cmd_tdd()
@@ -2352,15 +2813,22 @@ def scaffold(args):
     else:
         print("  Skipped existing settings.json (use --update to merge, --force to overwrite)")
 
-    # 7. Placeholder files for Claude to customize with real values
-    for name in ["CLAUDE.md", "ARCHITECTURE.md"]:
-        fp = project_dir / name
-        result = safe_write(fp, "<!-- Generated by Claude Launchpad — Claude will customize -->\n", force, dry_run=dry_run)
-        if result == "skipped":
-            print(f"  Skipped existing {name}")
-        else:
-            created_files.append(name)
-            print(f"  Created placeholder {name}")
+    # 7. Generate real CLAUDE.md and ARCHITECTURE.md with interview data
+    claude_md_path = project_dir / "CLAUDE.md"
+    result = safe_write(claude_md_path, get_claude_md(args), force, dry_run=dry_run)
+    if result == "skipped":
+        print("  Skipped existing CLAUDE.md")
+    else:
+        created_files.append("CLAUDE.md")
+        print("  Created CLAUDE.md")
+
+    arch_md_path = project_dir / "ARCHITECTURE.md"
+    result = safe_write(arch_md_path, get_architecture_md(args), force, dry_run=dry_run)
+    if result == "skipped":
+        print("  Skipped existing ARCHITECTURE.md")
+    else:
+        created_files.append("ARCHITECTURE.md")
+        print("  Created ARCHITECTURE.md")
 
     # 8. CI/CD and PR template
     ci_cd = getattr(args, 'ci_cd', 'none') or 'none'
@@ -2413,6 +2881,7 @@ def scaffold(args):
         "lint_cmd": getattr(args, 'lint_cmd', None),
         "test_cmd": getattr(args, 'test_cmd', None),
         "migrate_cmd": getattr(args, 'migrate_cmd', None),
+        "skill_path": str(Path(__file__).resolve().parent.parent),
         "scaffolded_at": datetime.now().isoformat(),
         "version": VERSION,
         "last_analysis": datetime.now().isoformat() if getattr(args, 'analyze', False) else None,
@@ -2476,7 +2945,7 @@ def scaffold(args):
         else:
             print("\n✓ Verification passed — all checks clean")
 
-    print("\nNext: Claude generates CLAUDE.md, ARCHITECTURE.md with real values from the interview.")
+    print("\nNext: Review CLAUDE.md and ARCHITECTURE.md. Run /status to start building.")
     return 0
 
 
@@ -2541,7 +3010,7 @@ def upgrade(project_dir: Path) -> int:
 
 def main():
     p = argparse.ArgumentParser(description="Claude Launchpad scaffolder")
-    p.add_argument("--project-name", required=True)
+    p.add_argument("--project-name", required=False, default=None)
     p.add_argument("--frontend", choices=["nextjs", "react-vite", "vue", "sveltekit", "none"], default="nextjs")
     p.add_argument("--backend", choices=["node-express", "node-fastify", "python-fastapi", "python-django", "go", "rust-actix", "ruby-rails", "integrated", "none"], default="integrated")
     p.add_argument("--database", choices=["postgresql", "mongodb", "supabase", "sqlite", "mysql", "dynamodb", "none"], default="postgresql")
@@ -2574,7 +3043,7 @@ def main():
     p.add_argument("--analyze", action="store_true", help="Analyze existing codebase to generate project-specific rules")
     p.add_argument("--monorepo", action="store_true", help="Enable monorepo conventions rule")
     p.add_argument("--migrate-ai-configs", action="store_true", dest="migrate_ai_configs", help="Detect and migrate other AI tool configs (.cursorrules, copilot, etc.)")
-    p.add_argument("--event-systems", nargs="*", default=[], help="Event systems (kafka, bullmq, rabbitmq, celery, temporal, nats, aws-events, flink, spark-streaming)")
+    p.add_argument("--event-systems", nargs="*", default=[], help="Event systems (kafka, bullmq, rabbitmq, celery, temporal, nats, aws-events, redis-streams, flink, spark-streaming)")
     p.add_argument("--event-patterns", nargs="*", default=[], help="Event patterns (event-sourcing, cqrs, saga, outbox)")
     p.add_argument("--schema-format", choices=["avro", "protobuf", "json-schema", "none"], default="none", help="Event schema format")
     p.add_argument("--workflow-orchestration", choices=["temporal", "none"], default="none", help="Workflow orchestration platform")
@@ -2590,6 +3059,9 @@ def main():
     # Apply preset defaults (user-specified flags override preset)
     if args.preset:
         preset = PRESETS[args.preset]
+        # Default project-name to preset name if not specified
+        if not args.project_name:
+            args.project_name = args.preset
         for key, value in preset.items():
             # Only apply preset value if user didn't explicitly set it
             # For store_true flags, default is False; for choices, check if it's the argparse default
@@ -2600,6 +3072,10 @@ def main():
                     setattr(args, key, value)
             elif current is None or current == "none":
                 setattr(args, key, value)
+
+    # Require project-name (after preset may have set it)
+    if not args.project_name:
+        p.error("the following arguments are required: --project-name")
 
     # AI config migration — detect and migrate .cursorrules, copilot, etc.
     if getattr(args, 'migrate_ai_configs', False) or getattr(args, 'analyze', False):
