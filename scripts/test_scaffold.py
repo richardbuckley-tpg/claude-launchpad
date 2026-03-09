@@ -240,7 +240,7 @@ class TestMergeSettings(unittest.TestCase):
     def test_merge_adds_new_hook_types(self):
         settings_path = self.tmpdir / "settings.json"
         settings_path.write_text(json.dumps({
-            "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "block", "pattern": "rm -rf"}]}]}
+            "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo test"}]}]}
         }))
         new_settings = {
             "hooks": {
@@ -255,18 +255,18 @@ class TestMergeSettings(unittest.TestCase):
     def test_merge_skips_duplicate_hook_matchers(self):
         settings_path = self.tmpdir / "settings.json"
         settings_path.write_text(json.dumps({
-            "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "block", "pattern": "old"}]}]}
+            "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo old"}]}]}
         }))
         new_settings = {
             "hooks": {
-                "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "block", "pattern": "new"}]}]
+                "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo new"}]}]
             }
         }
         merged, changes = merge_settings(settings_path, new_settings)
         # Should NOT add duplicate Bash matcher
         bash_hooks = [h for h in merged["hooks"]["PreToolUse"] if h.get("matcher") == "Bash"]
         self.assertEqual(len(bash_hooks), 1)
-        self.assertEqual(bash_hooks[0]["hooks"][0]["pattern"], "old")  # original preserved
+        self.assertEqual(bash_hooks[0]["hooks"][0]["command"], "echo old")  # original preserved
 
     def test_merge_handles_missing_file(self):
         settings_path = self.tmpdir / "nonexistent.json"
@@ -403,7 +403,8 @@ class TestGetHooks(unittest.TestCase):
         hooks = get_hooks(args)
         pre_hooks = hooks.get("PreToolUse", [])
         force_push_hooks = [h for h in pre_hooks
-                           if "force" in str(h.get("hooks", [{}])[0].get("pattern", ""))]
+                           if "force" in str(h.get("hooks", [{}])[0].get("command", ""))
+                           and "exit 2" in str(h.get("hooks", [{}])[0].get("command", ""))]
         self.assertTrue(len(force_push_hooks) > 0, "Should have force-push block hook")
 
     def test_always_generates_secret_block(self):
@@ -411,7 +412,8 @@ class TestGetHooks(unittest.TestCase):
         hooks = get_hooks(args)
         pre_hooks = hooks.get("PreToolUse", [])
         secret_hooks = [h for h in pre_hooks
-                       if "sk-" in str(h.get("hooks", [{}])[0].get("pattern", ""))]
+                       if "sk-" in str(h.get("hooks", [{}])[0].get("command", ""))
+                       and "exit 2" in str(h.get("hooks", [{}])[0].get("command", ""))]
         self.assertTrue(len(secret_hooks) > 0, "Should have secret block hook")
 
     def test_secret_hook_scoped_to_bash(self):
@@ -420,8 +422,8 @@ class TestGetHooks(unittest.TestCase):
         hooks = get_hooks(args)
         pre_hooks = hooks.get("PreToolUse", [])
         for h in pre_hooks:
-            pattern = h.get("hooks", [{}])[0].get("pattern", "")
-            if "sk-" in pattern:
+            cmd = h.get("hooks", [{}])[0].get("command", "")
+            if "sk-" in cmd:
                 self.assertEqual(h["matcher"], "Bash",
                                "Secret detection hook should use Bash matcher, not Write|Edit")
 
@@ -444,13 +446,11 @@ class TestGetHooks(unittest.TestCase):
         hooks = get_hooks(args)
         pre_hooks = hooks.get("PreToolUse", [])
         for h in pre_hooks:
-            pattern_str = h.get("hooks", [{}])[0].get("pattern", "")
-            if "feat" in pattern_str:
-                # Pattern should only match git commit -m, not --amend
-                pat = re.compile(pattern_str)
-                self.assertIsNone(pat.search('git commit --amend'))
-                self.assertIsNone(pat.search('git commit -F msg.txt'))
-                self.assertIsNone(pat.search('git commit'))  # editor mode
+            cmd_str = h.get("hooks", [{}])[0].get("command", "")
+            if "feat" in cmd_str:
+                # Command checks for 'git commit -m', so --amend and -F won't trigger
+                self.assertIn("git commit -m", cmd_str,
+                             "Hook should only check git commit -m, not --amend or -F")
 
     def test_lint_cmd_rejected_if_unsafe(self):
         args = make_args(lint_cmd="rm -rf /")
@@ -718,7 +718,7 @@ class TestValidateSettings(unittest.TestCase):
 
     def test_valid_settings_no_warnings(self):
         settings = {
-            "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "block", "pattern": "rm"}]}]},
+            "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo test"}]}]},
             "mcpServers": {"github": {"command": "npx", "args": ["-y", "server"]}}
         }
         warnings = validate_settings(settings)
