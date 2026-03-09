@@ -37,7 +37,7 @@ After scaffolding, you have working slash commands immediately:
 ```
 /idea-to-prd "user dashboard with analytics"   # Research & write a PRD
 /build user-dashboard                            # Full pipeline: design → test → ship
-/status                                          # Where am I? What's next?
+/project-status                                   # Where am I? What's next?
 ```
 
 That's it. You're set up.
@@ -97,7 +97,7 @@ Launchpad generates a complete Claude Code configuration tailored to your projec
 | `/evolve` | Re-analyze codebase with learned corrections, update rules |
 | `/audit` | Check config health, token cost, staleness |
 | `/analyze` | Detect code patterns, generate project-specific rules |
-| `/status` | Where am I? Recent changes, test health, next action |
+| `/project-status` | Where am I? Recent changes, test health, next action |
 | `/handoff` | Save session context for next time |
 | `/tdd <feature>` | Red-green-refactor cycle (when `--tdd` is set) |
 

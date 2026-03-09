@@ -568,7 +568,7 @@ class TestScaffoldEndToEnd(unittest.TestCase):
         self.assertEqual(result, 0)
 
         project_dir = self.tmpdir / "test-app"
-        self.assertTrue((project_dir / ".claude" / "commands" / "status.md").exists())
+        self.assertTrue((project_dir / ".claude" / "commands" / "project-status.md").exists())
         self.assertTrue((project_dir / ".claude" / "commands" / "handoff.md").exists())
         self.assertTrue((project_dir / ".claude" / "skills" / "simplify.md").exists())
         self.assertTrue((project_dir / ".claude" / "settings.json").exists())
@@ -609,25 +609,25 @@ class TestScaffoldEndToEnd(unittest.TestCase):
         project_dir = self.tmpdir / "test-app"
         project_dir.mkdir()
         (project_dir / ".claude" / "commands").mkdir(parents=True)
-        (project_dir / ".claude" / "commands" / "status.md").write_text("custom content")
+        (project_dir / ".claude" / "commands" / "project-status.md").write_text("custom content")
 
         args = make_args(output_dir=str(self.tmpdir / "test-app"))
         scaffold(args)
 
         # Original file should be preserved
-        content = (project_dir / ".claude" / "commands" / "status.md").read_text()
+        content = (project_dir / ".claude" / "commands" / "project-status.md").read_text()
         self.assertEqual(content, "custom content")
 
     def test_force_mode_overwrites(self):
         project_dir = self.tmpdir / "test-app"
         project_dir.mkdir()
         (project_dir / ".claude" / "commands").mkdir(parents=True)
-        (project_dir / ".claude" / "commands" / "status.md").write_text("custom content")
+        (project_dir / ".claude" / "commands" / "project-status.md").write_text("custom content")
 
         args = make_args(output_dir=str(self.tmpdir / "test-app"), force=True)
         scaffold(args)
 
-        content = (project_dir / ".claude" / "commands" / "status.md").read_text()
+        content = (project_dir / ".claude" / "commands" / "project-status.md").read_text()
         self.assertNotEqual(content, "custom content")
         self.assertIn("project status", content)
 

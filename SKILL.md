@@ -436,6 +436,6 @@ Each issue includes the exact file, line, and recommended change.
 
 **Respect existing work.** For existing projects, never overwrite without permission. Enhance, don't replace.
 
-**Session continuity.** Every project gets handoff + `/handoff` command + `/status` command.
+**Session continuity.** Every project gets handoff + `/handoff` command + `/project-status` command.
 
 **Audit after generation.** Always run the auditor to verify what you produced.

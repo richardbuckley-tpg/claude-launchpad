@@ -102,7 +102,7 @@ PRESETS = {
 
 # ── Slash Commands ───────────────────────────────────────────────────────
 
-def cmd_status():
+def cmd_project_status():
     return """---
 description: Show project status — recent changes, test health, open TODOs
 ---
@@ -2137,7 +2137,7 @@ def get_handoff(project_name):
 
 ## Next Steps
 1. Review CLAUDE.md and ARCHITECTURE.md
-2. Run `/status` to verify setup
+2. Run `/project-status` to verify setup
 3. Start first feature with `/new-feature <feature-name>`
 
 ## Architecture Decisions
@@ -2284,7 +2284,7 @@ def get_claude_md(args):
 
     # Session management
     lines.append("## Session Management")
-    lines.append("Run `/handoff` at end of each session. Run `/status` to resume.")
+    lines.append("Run `/handoff` at end of each session. Run `/project-status` to resume.")
     lines.append("")
 
     return "\n".join(lines)
@@ -2669,7 +2669,7 @@ def scaffold(args):
     skill_path = str(Path(__file__).resolve().parent.parent)
     cmds_dir = project_dir / ".claude" / "commands"
     commands = {
-        "status": cmd_status(), "handoff": cmd_handoff(),
+        "project-status": cmd_project_status(), "handoff": cmd_handoff(),
         "new-feature": cmd_new_feature(), "fix-bug": cmd_fix_bug(),
         "idea-to-prd": cmd_idea_to_prd(),
         "audit": cmd_audit(skill_path),
@@ -2945,7 +2945,7 @@ def scaffold(args):
         else:
             print("\n✓ Verification passed — all checks clean")
 
-    print("\nNext: Review CLAUDE.md and ARCHITECTURE.md. Run /status to start building.")
+    print("\nNext: Review CLAUDE.md and ARCHITECTURE.md. Run /project-status to start building.")
     return 0
 
 
@@ -2990,7 +2990,7 @@ def upgrade(project_dir: Path) -> int:
     # Migration: add handoff if missing
     handoff_path = project_dir / ".claude" / "handoff.md"
     if not handoff_path.exists():
-        handoff_path.write_text("# Session Handoff\n\n## What's Working\n- (not yet populated)\n\n## Next Steps\n1. Run /status\n")
+        handoff_path.write_text("# Session Handoff\n\n## What's Working\n- (not yet populated)\n\n## Next Steps\n1. Run /project-status\n")
         changes.append("Created .claude/handoff.md")
 
     # Update version in config
