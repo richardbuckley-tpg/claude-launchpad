@@ -2682,6 +2682,18 @@ def scaffold(args):
         commands["tdd"] = cmd_tdd()
     if args.team:
         commands["pipeline"] = cmd_pipeline()
+    # Handle renamed commands from previous versions
+    RENAMED_COMMANDS = {"status": "project-status"}
+    for old_name, new_name in RENAMED_COMMANDS.items():
+        old_path = cmds_dir / f"{old_name}.md"
+        new_path = cmds_dir / f"{new_name}.md"
+        if old_path.exists() and not new_path.exists() and not dry_run:
+            old_path.rename(new_path)
+            print(f"  Renamed {old_name}.md → {new_name}.md")
+        elif old_path.exists() and not dry_run:
+            old_path.unlink()
+            print(f"  Removed obsolete {old_name}.md")
+
     created_cmds, skipped_cmds = 0, 0
     for name, content in commands.items():
         fp = cmds_dir / f"{name}.md"
