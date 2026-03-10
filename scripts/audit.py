@@ -217,9 +217,10 @@ def check_settings(project_dir: Path, result: AuditResult):
                     matcher = hook.get("matcher", "")
                     hook_items = hook.get("hooks", [])
                     for h in hook_items:
-                        if isinstance(h, dict) and h.get("type") == "block":
-                            pattern = h.get("pattern", "")
-                            if ".md" in str(pattern) and "Write" in str(matcher):
+                        if isinstance(h, dict) and h.get("type") == "command":
+                            cmd = h.get("command", "")
+                            # Detect overly broad Write/Edit blocking
+                            if "exit 2" in cmd and ".md" in cmd and "Write" in str(matcher):
                                 result.add_issue("warning",
                                     f"Hook blocks .md file writes — may be overly restrictive",
                                     "Consider narrowing the block pattern",
@@ -238,7 +239,7 @@ def check_staleness(project_dir: Path, result: AuditResult):
             existing_cmds = {f.stem for f in commands_dir.glob("*.md")}
 
             # Common command references to check
-            for cmd in ["status", "handoff", "new-feature", "fix-bug", "deploy", "tdd", "audit"]:
+            for cmd in ["project-status", "handoff", "new-feature", "fix-bug", "deploy", "tdd", "audit"]:
                 if f"/{cmd}" in content and cmd not in existing_cmds:
                     result.add_issue("warning",
                         f"CLAUDE.md references /{cmd} but command doesn't exist",
@@ -626,15 +627,15 @@ def check_handoff(project_dir: Path, result: AuditResult):
 
 def check_total_budget(result: AuditResult):
     """Check overall token budget."""
-    if result.total_tokens > 2400:
-        result.add_issue("warning",
-            f"Total config: ~{result.total_tokens} tokens (target ≤1,600)",
-            "Consider trimming the largest components",
-            category="efficiency")
     if result.total_tokens > 4000:
         result.add_issue("error",
             f"Total config: ~{result.total_tokens} tokens — significant per-message overhead",
             "Reduce CLAUDE.md and agent sizes to lower token burn",
+            category="efficiency")
+    elif result.total_tokens > 2400:
+        result.add_issue("warning",
+            f"Total config: ~{result.total_tokens} tokens (target ≤1,600)",
+            "Consider trimming the largest components",
             category="efficiency")
 
 
@@ -839,7 +840,7 @@ def generate_recommendations(project_dir: Path) -> list[dict]:
     commands_dir = project_dir / ".claude" / "commands"
     if commands_dir.exists():
         existing_cmds = {f.stem for f in commands_dir.glob("*.md")}
-        essential_cmds = {"status", "handoff"}
+        essential_cmds = {"project-status", "handoff"}
         missing = essential_cmds - existing_cmds
         if missing:
             recommendations.append({
@@ -928,7 +929,7 @@ def apply_fixes(project_dir: Path, result: AuditResult) -> list[str]:
     # Fix 1: Create missing handoff.md
     handoff = project_dir / ".claude" / "handoff.md"
     if not handoff.exists() and (project_dir / ".claude").exists():
-        handoff.write_text("# Session Handoff\n\n## What's Working\n- (not yet populated)\n\n## In Progress\n- (nothing yet)\n\n## Known Issues\n- (none)\n\n## Next Steps\n1. Run /status\n")
+        handoff.write_text("# Session Handoff\n\n## What's Working\n- (not yet populated)\n\n## In Progress\n- (nothing yet)\n\n## Known Issues\n- (none)\n\n## Next Steps\n1. Run /project-status\n")
         actions.append("Created .claude/handoff.md")
 
     # Fix 2: Add missing YAML frontmatter to agents

@@ -32,7 +32,10 @@ def load_learn_log(project_dir: Path) -> list:
     log_path = project_dir / LEARN_LOG_FILE
     if log_path.exists():
         try:
-            return json.loads(log_path.read_text())
+            data = json.loads(log_path.read_text())
+            if not isinstance(data, list):
+                return []
+            return data
         except (json.JSONDecodeError, UnicodeDecodeError):
             return []
     return []

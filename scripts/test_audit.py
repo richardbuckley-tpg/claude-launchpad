@@ -667,7 +667,7 @@ class TestRecommendations(unittest.TestCase):
             agents={"architect": "---\nname: a\n---\n", "testing": "---\nname: t\n---\n",
                     "reviewer": "---\nname: r\n---\n", "debugger": "---\nname: d\n---\n",
                     "push": "---\nname: p\n---\n"},
-            commands={"status": "---\ndescription: s\n---\n", "handoff": "---\ndescription: h\n---\n"},
+            commands={"project-status": "---\ndescription: s\n---\n", "handoff": "---\ndescription: h\n---\n"},
             settings={"mcpServers": {"gh": {"command": "npx"}}},
             handoff=True,
         )

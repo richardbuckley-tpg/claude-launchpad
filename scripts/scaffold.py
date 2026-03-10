@@ -1053,11 +1053,13 @@ def get_hooks(args):
 
     # All projects: block force-push to main
     # Hook reads JSON from stdin: { "tool_input": { "command": "..." }, ... }
+    # jq guard: if jq is not installed, hook silently passes (safety degrades gracefully)
+    JQ_GUARD = "command -v jq >/dev/null 2>&1 || { cat >/dev/null; exit 0; }; "
     pre_hooks.append({
         "matcher": "Bash",
         "hooks": [{
             "type": "command",
-            "command": "INPUT=$(cat); CMD=$(echo \"$INPUT\" | jq -r '.tool_input.command // empty'); if echo \"$CMD\" | grep -qE 'git push.*(--force|-f).*(main|master)'; then echo 'BLOCKED: Force push to main/master is not allowed' >&2; exit 2; fi"
+            "command": JQ_GUARD + "INPUT=$(cat); CMD=$(echo \"$INPUT\" | jq -r '.tool_input.command // empty'); if echo \"$CMD\" | grep -qE 'git push.*(--force|-f).*(main|master)'; then echo 'BLOCKED: Force push to main/master is not allowed' >&2; exit 2; fi"
         }]
     })
 
@@ -1067,7 +1069,7 @@ def get_hooks(args):
         "matcher": "Bash",
         "hooks": [{
             "type": "command",
-            "command": "INPUT=$(cat); CMD=$(echo \"$INPUT\" | jq -r '.tool_input.command // empty'); if echo \"$CMD\" | grep -qE 'git (add|commit)' && echo \"$CMD\" | grep -qE '(sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36}|AKIA[0-9A-Z]{16})'; then echo 'BLOCKED: Secrets detected in git command' >&2; exit 2; fi"
+            "command": JQ_GUARD + "INPUT=$(cat); CMD=$(echo \"$INPUT\" | jq -r '.tool_input.command // empty'); if echo \"$CMD\" | grep -qE 'git (add|commit)' && echo \"$CMD\" | grep -qE '(sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36}|AKIA[0-9A-Z]{16})'; then echo 'BLOCKED: Secrets detected in git command' >&2; exit 2; fi"
         }]
     })
 
@@ -1078,7 +1080,7 @@ def get_hooks(args):
             "matcher": "Bash",
             "hooks": [{
                 "type": "command",
-                "command": "INPUT=$(cat); CMD=$(echo \"$INPUT\" | jq -r '.tool_input.command // empty'); if echo \"$CMD\" | grep -qE 'git commit -m ' && ! echo \"$CMD\" | grep -qE 'git commit -m .*(feat|fix|refactor|test|docs|chore|ci|style|perf|build|revert)[(:]'; then echo 'BLOCKED: Commit message must use conventional format (feat|fix|refactor|...)' >&2; exit 2; fi"
+                "command": JQ_GUARD + "INPUT=$(cat); CMD=$(echo \"$INPUT\" | jq -r '.tool_input.command // empty'); if echo \"$CMD\" | grep -qE 'git commit -m ' && ! echo \"$CMD\" | grep -qE 'git commit -m .*(feat|fix|refactor|test|docs|chore|ci|style|perf|build|revert)[(:]'; then echo 'BLOCKED: Commit message must use conventional format (feat|fix|refactor|...)' >&2; exit 2; fi"
             }]
         })
 
