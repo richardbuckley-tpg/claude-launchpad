@@ -2704,8 +2704,8 @@ def scaffold(args):
             old_path.rename(new_path)
             print(f"  Renamed {old_name}.md → {new_name}.md")
         elif old_path.exists() and not dry_run:
-            old_path.unlink()
-            print(f"  Removed obsolete {old_name}.md")
+            # New file already exists; keep old file as backup rather than deleting
+            print(f"  Note: {new_name}.md exists; keeping obsolete {old_name}.md (delete manually if not needed)")
 
     created_cmds, skipped_cmds = 0, 0
     for name, content in commands.items():

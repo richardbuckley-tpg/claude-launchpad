@@ -2,7 +2,7 @@
 name: claude-launchpad
 description: >
   Lean, token-optimized Claude Code bootstrapper. Conducts a structured interview, then generates
-  a complete .claude/ configuration — CLAUDE.md (≤100 lines), 6 agents (≤30 lines each), path-scoped
+  a complete .claude/ configuration — CLAUDE.md (≤100 lines), 8-13 agents (≤30 lines each), path-scoped
   rules, hooks, 8-10 skills, 7 slash commands, MCP config, and session handoff — all with real values,
   not placeholders. Includes a unique Config Auditor that scores any .claude/ setup for health, token
   cost, and staleness. Use when someone says "start a project", "bootstrap", "scaffold", "set up
@@ -70,7 +70,7 @@ Skip questions they've already answered. For existing projects, auto-detect and 
 - **What's your lint command?** (e.g., `npm run lint`, `ruff check .`)
 
 ### Backend
-- **Framework**: Node/Express, Node/Fastify, Python/FastAPI, Python/Django, Go, integrated (Next.js/SvelteKit), or none
+- **Framework**: Node/Express, Node/Fastify, Python/FastAPI, Python/Django, Go, Rust/Actix, Rails, integrated (Next.js/SvelteKit), or none
 
 ### Database
 - **Database + ORM**: PostgreSQL+Prisma, PostgreSQL+Drizzle, PostgreSQL+SQLAlchemy, MongoDB+Mongoose, Supabase, SQLite, or none
@@ -81,7 +81,7 @@ Skip questions they've already answered. For existing projects, auto-detect and 
 - **Provider**: Clerk, NextAuth/Auth.js, Supabase Auth, custom JWT, or none
 
 ### AI
-- **Does the project use AI/LLMs?** (Enables AI-specific skills and `/prompt-test` command)
+- **Does the project use AI/LLMs?** (Enables AI-specific skills)
 
 Read `reference/stacks.md` for the section matching each choice. Use it to inform CLAUDE.md
 content, rules, and agent customizations.
@@ -420,7 +420,7 @@ Fixes
 The auditor reports issues with specific fix suggestions. Apply fixes manually or ask Claude to help.
 Each issue includes the exact file, line, and recommended change.
 
-> Note: The `--fix` flag is reserved for future use. Currently all fixes require review.
+> The `--fix` flag applies safe, non-destructive fixes (missing frontmatter, handoff doc, invalid JSON backup).
 
 ---
 

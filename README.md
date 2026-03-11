@@ -231,7 +231,7 @@ The auditor detects staleness automatically — if rules reference deleted files
 |----------|---------|
 | **Frontend** | Next.js, React+Vite, Vue 3/Nuxt, SvelteKit |
 | **Backend** | Express, Fastify, FastAPI, Django, Go, Rust/Actix, Rails, integrated |
-| **Database** | PostgreSQL, MongoDB, Supabase, SQLite, MySQL, DynamoDB |
+| **Database** | PostgreSQL, MongoDB, Supabase, SQLite, MySQL (basic), DynamoDB (basic) |
 | **ORM** | Prisma, Drizzle, SQLAlchemy, Mongoose, TypeORM, Sequelize, ActiveRecord |
 | **Auth** | Clerk, NextAuth/Auth.js, Supabase Auth, custom JWT |
 | **Hosting** | Vercel, Railway, AWS, Fly.io, self-hosted |

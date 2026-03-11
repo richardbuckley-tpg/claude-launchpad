@@ -539,7 +539,8 @@ def detect_stack(project_dir: Path) -> dict:
         stack["orm"] = "activerecord"
 
     # Database refinement from env files
-    for env_file in [".env", ".env.local", ".env.example"]:
+    # Only read .env.example (safe) — never read .env or .env.local which contain real secrets
+    for env_file in [".env.example"]:
         env_path = project_dir / env_file
         if env_path.exists():
             try:
