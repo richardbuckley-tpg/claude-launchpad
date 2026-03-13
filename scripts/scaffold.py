@@ -2971,7 +2971,8 @@ def scaffold(args):
         else:
             print("\n✓ Verification passed — all checks clean")
 
-    print("\nNext: Review CLAUDE.md and ARCHITECTURE.md. Run /project-status to start building.")
+    print("\nNext: Review CLAUDE.md and ARCHITECTURE.md, then restart Claude Code so it picks up the new commands.")
+    print("  After restarting, run /project-status to start building.")
     return 0
 
 

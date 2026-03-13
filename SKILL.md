@@ -285,7 +285,9 @@ Show the health score and token estimate. Then act on the score:
 2. Show CLAUDE.md content for review
 3. Show audit score and token estimate
 4. Ask if anything needs adjustment
-5. Suggest next steps:
+5. **Important**: Tell the user to restart Claude Code so it discovers the new commands and agents.
+   Slash commands are loaded at startup — they won't appear until Claude Code is reopened.
+6. Suggest next steps (after restart):
    - `/build <feature>` to start building with the full agent pipeline
    - `/analyze` to extract more patterns as code grows
    - `/learn <correction>` to teach Claude project-specific preferences
