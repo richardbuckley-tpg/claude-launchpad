@@ -224,57 +224,36 @@ Once approved, start building with: `/build <feature-name>` (reference the PRD)
 """
 
 
-def cmd_build(domain="general", compliance=None, tdd=False):
+def cmd_build(domain="general", compliance=None, tdd=False, worktree=True):
     has_domain = domain != "general"
     has_compliance = compliance and compliance != ['none'] and 'none' not in compliance
+    has_domain_audit = has_domain or has_compliance
 
-    # Build the numbered steps dynamically
-    step = 3  # steps 1 (design) and 2 (security) are always first
+    # Worktree setup/cleanup steps
+    worktree_setup = ""
+    worktree_cleanup = ""
+    if worktree:
+        worktree_setup = """
+1. **Worktree**: Create an isolated workspace for this feature
+   - `git worktree add .worktrees/$ARGUMENTS -b feature/$ARGUMENTS`
+   - If worktree creation fails (shallow clone, etc.), fall back to a regular branch: `git checkout -b feature/$ARGUMENTS`
+   - All subsequent work happens in the worktree directory
+"""
+        worktree_cleanup = """
+**Cleanup**: Remove the worktree (even if the pipeline failed)
+   - `git worktree remove .worktrees/$ARGUMENTS`
+"""
+
+    step = 3 if worktree else 2  # account for worktree step
+
+    # Build the pipeline stages
+    # In TDD mode: [Security + Testing] parallel, then Implement, then [Domain + Review] parallel
+    # In non-TDD mode: Security, Implement, then [Testing + Domain] parallel if domain, then Review
 
     if tdd:
-        test_step = f"""{step}. **Test (TDD)**: Run `@testing Write failing tests for "$ARGUMENTS"`
-   - Tests are derived from the blueprint spec — define expected behavior BEFORE implementation
-   - Run tests to confirm they fail (red) — this validates the tests are meaningful
-   - Tests define the contract: function signatures, API responses, data shapes
-"""
-        step += 1
-        impl_step = f"""{step}. **Implement**: Build until all tests pass (green)
-   - Read the blueprint AND the failing tests — both are your spec
-   - Follow existing patterns (check `.claude/rules/`)
-   - Run tests after each major piece — stay in the red→green loop
-   - Once green, refactor if needed (tests protect you)
-"""
-        step += 1
-    else:
-        impl_step = f"""{step}. **Implement**: Build following the approved blueprint
-   - Read the blueprint first — it's the spec
-   - Follow existing patterns (check `.claude/rules/`)
-   - Create all layers: data model, API, UI, types
-"""
-        step += 1
-        test_step = f"""{step}. **Test**: Run `@testing Write tests for "$ARGUMENTS"`
-   - Tests are based on the blueprint, not the implementation
-   - Must pass before continuing
-"""
-        step += 1
-
-    domain_step = ""
-    if has_domain or has_compliance:
-        domain_step = f"""{step}. **Domain Audit**: Run `@compliance-auditor Audit "$ARGUMENTS" for domain compliance`
-   - Must PASS before review — non-compliant findings block the PR
-   - Read domain knowledge skills for applicable rules
-"""
-        step += 1
-
-    review_num = step
-    ship_num = step + 1
-
-    if tdd:
-        build_test_steps = f"{test_step}\n{impl_step}"
-    else:
-        build_test_steps = f"{impl_step}\n{test_step}"
-
-    return f"""---
+        if has_domain_audit:
+            # TDD + domain: two parallel groups
+            return f"""---
 description: Full feature pipeline — design, build, test, review, ship
 ---
 
@@ -285,23 +264,153 @@ Execute the full development pipeline with context passing through blueprints:
 0. **PRD** (optional): If a PRD exists in `docs/prds/` for this feature, read it first.
    - The architect uses the PRD as input. If no PRD exists, skip this step.
    - To create a PRD from an idea: `/idea-to-prd <idea>`
-
-1. **Design**: Run `@architect Design the "$ARGUMENTS" feature`
+{worktree_setup}
+{step}. **Design**: Run `@architect Design the "$ARGUMENTS" feature`
    - Wait for blueprint in `docs/blueprints/`
    - Review the blueprint and get approval before continuing
 
-2. **Security** (if auth/payments involved): Run `@security Review the blueprint`
+{step + 1}. **Security + Testing** — run these IN PARALLEL (launch both simultaneously):
+   - `@security Review the blueprint`
+   - `@testing Write failing tests for "$ARGUMENTS"` (TDD: tests define the contract)
+   Wait for BOTH to complete. If security finds CRITICAL: stop the pipeline.
+   Run tests to confirm they fail (red) — this validates the tests are meaningful.
 
-{build_test_steps}
-{domain_step}
-{review_num}. **Review**: Run `@reviewer Review all changes`
-   - Must APPROVE before shipping
+{step + 2}. **Implement**: Build until all tests pass (green)
+   - Read the blueprint AND the failing tests — both are your spec
+   - Follow existing patterns (check `.claude/rules/`)
+   - Run tests after each major piece — stay in the red→green loop
+   - Once green, refactor if needed (tests protect you)
 
-{ship_num}. **Pre-flight**: Run `@pre-push Run pre-push checks`
+{step + 3}. **Domain Audit + Review** — run these IN PARALLEL (launch both simultaneously):
+   - `@compliance-auditor Audit "$ARGUMENTS" for domain compliance`
+   - `@reviewer Review all changes`
+   Wait for BOTH to complete. Non-compliant findings or REQUEST_CHANGES block shipping.
+
+{step + 4}. **Pre-flight**: Run `@pre-push Run pre-push checks`
    - Must be READY before shipping — fix any failures first
 
-{ship_num + 1}. **Ship**: Run `@push Create PR for "$ARGUMENTS"`
+{step + 5}. **Ship**: Run `@push Create PR for "$ARGUMENTS"`
+{worktree_cleanup}
+Update `.claude/handoff.md` after completion.
+"""
+        else:
+            # TDD without domain: one parallel group (security + testing)
+            return f"""---
+description: Full feature pipeline — design, build, test, review, ship
+---
 
+Feature: $ARGUMENTS
+
+Execute the full development pipeline with context passing through blueprints:
+
+0. **PRD** (optional): If a PRD exists in `docs/prds/` for this feature, read it first.
+   - The architect uses the PRD as input. If no PRD exists, skip this step.
+   - To create a PRD from an idea: `/idea-to-prd <idea>`
+{worktree_setup}
+{step}. **Design**: Run `@architect Design the "$ARGUMENTS" feature`
+   - Wait for blueprint in `docs/blueprints/`
+   - Review the blueprint and get approval before continuing
+
+{step + 1}. **Security + Testing** — run these IN PARALLEL (launch both simultaneously):
+   - `@security Review the blueprint`
+   - `@testing Write failing tests for "$ARGUMENTS"` (TDD: tests define the contract)
+   Wait for BOTH to complete. If security finds CRITICAL: stop the pipeline.
+   Run tests to confirm they fail (red) — this validates the tests are meaningful.
+
+{step + 2}. **Implement**: Build until all tests pass (green)
+   - Read the blueprint AND the failing tests — both are your spec
+   - Follow existing patterns (check `.claude/rules/`)
+   - Run tests after each major piece — stay in the red→green loop
+   - Once green, refactor if needed (tests protect you)
+
+{step + 3}. **Review**: Run `@reviewer Review all changes`
+   - Must APPROVE before shipping
+
+{step + 4}. **Pre-flight**: Run `@pre-push Run pre-push checks`
+   - Must be READY before shipping — fix any failures first
+
+{step + 5}. **Ship**: Run `@push Create PR for "$ARGUMENTS"`
+{worktree_cleanup}
+Update `.claude/handoff.md` after completion.
+"""
+    else:
+        if has_domain_audit:
+            # Non-TDD + domain: parallel testing + domain audit after implement
+            return f"""---
+description: Full feature pipeline — design, build, test, review, ship
+---
+
+Feature: $ARGUMENTS
+
+Execute the full development pipeline with context passing through blueprints:
+
+0. **PRD** (optional): If a PRD exists in `docs/prds/` for this feature, read it first.
+   - The architect uses the PRD as input. If no PRD exists, skip this step.
+   - To create a PRD from an idea: `/idea-to-prd <idea>`
+{worktree_setup}
+{step}. **Design**: Run `@architect Design the "$ARGUMENTS" feature`
+   - Wait for blueprint in `docs/blueprints/`
+   - Review the blueprint and get approval before continuing
+
+{step + 1}. **Security** (if auth/payments involved): Run `@security Review the blueprint`
+
+{step + 2}. **Implement**: Build following the approved blueprint
+   - Read the blueprint first — it's the spec
+   - Follow existing patterns (check `.claude/rules/`)
+   - Create all layers: data model, API, UI, types
+
+{step + 3}. **Testing + Domain Audit** — run these IN PARALLEL (launch both simultaneously):
+   - `@testing Write tests for "$ARGUMENTS"` — tests must pass
+   - `@compliance-auditor Audit "$ARGUMENTS" for domain compliance` — must be compliant
+   Wait for BOTH to complete. Test failures or non-compliant findings block shipping.
+
+{step + 4}. **Review**: Run `@reviewer Review all changes`
+   - Must APPROVE before shipping
+
+{step + 5}. **Pre-flight**: Run `@pre-push Run pre-push checks`
+   - Must be READY before shipping — fix any failures first
+
+{step + 6}. **Ship**: Run `@push Create PR for "$ARGUMENTS"`
+{worktree_cleanup}
+Update `.claude/handoff.md` after completion.
+"""
+        else:
+            # Non-TDD without domain: no meaningful parallelism
+            return f"""---
+description: Full feature pipeline — design, build, test, review, ship
+---
+
+Feature: $ARGUMENTS
+
+Execute the full development pipeline with context passing through blueprints:
+
+0. **PRD** (optional): If a PRD exists in `docs/prds/` for this feature, read it first.
+   - The architect uses the PRD as input. If no PRD exists, skip this step.
+   - To create a PRD from an idea: `/idea-to-prd <idea>`
+{worktree_setup}
+{step}. **Design**: Run `@architect Design the "$ARGUMENTS" feature`
+   - Wait for blueprint in `docs/blueprints/`
+   - Review the blueprint and get approval before continuing
+
+{step + 1}. **Security** (if auth/payments involved): Run `@security Review the blueprint`
+
+{step + 2}. **Implement**: Build following the approved blueprint
+   - Read the blueprint first — it's the spec
+   - Follow existing patterns (check `.claude/rules/`)
+   - Create all layers: data model, API, UI, types
+
+{step + 3}. **Test**: Run `@testing Write tests for "$ARGUMENTS"`
+   - Tests are based on the blueprint, not the implementation
+   - Must pass before continuing
+
+{step + 4}. **Review**: Run `@reviewer Review all changes`
+   - Must APPROVE before shipping
+
+{step + 5}. **Pre-flight**: Run `@pre-push Run pre-push checks`
+   - Must be READY before shipping — fix any failures first
+
+{step + 6}. **Ship**: Run `@push Create PR for "$ARGUMENTS"`
+{worktree_cleanup}
 Update `.claude/handoff.md` after completion.
 """
 
@@ -1168,6 +1277,7 @@ def get_agents(args):
     agents.append(("architect", f"""---
 name: architect
 description: Designs technical solutions from feature requests
+isolation: worktree
 tools: [Read, Glob, Grep, Bash, Write]
 model: opus
 ---
@@ -2687,7 +2797,7 @@ def scaffold(args):
         "new-feature": cmd_new_feature(), "fix-bug": cmd_fix_bug(),
         "idea-to-prd": cmd_idea_to_prd(),
         "audit": cmd_audit(skill_path),
-        "build": cmd_build(getattr(args, 'domain', 'general'), getattr(args, 'compliance', ['none']), args.tdd),
+        "build": cmd_build(getattr(args, 'domain', 'general'), getattr(args, 'compliance', ['none']), args.tdd, getattr(args, 'worktree', True)),
         "analyze": cmd_analyze(skill_path), "learn": cmd_learn(skill_path),
         "evolve": cmd_evolve(skill_path),
     }
@@ -3049,6 +3159,7 @@ def main():
     p.add_argument("--ai", action="store_true")
     p.add_argument("--team", action="store_true")
     p.add_argument("--tdd", action="store_true")
+    p.add_argument("--no-worktree", action="store_false", dest="worktree", help="Disable git worktree isolation for /build")
     p.add_argument("--conventional-commits", action="store_true")
     p.add_argument("--lint-cmd", default=None, help="Lint command (e.g., 'npm run lint')")
     p.add_argument("--test-cmd", default=None, help="Test command (e.g., 'npm run test')")

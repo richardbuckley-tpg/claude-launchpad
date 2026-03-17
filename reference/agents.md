@@ -21,6 +21,7 @@ All agents should have stack-specific customizations applied from the interview 
 ---
 name: architect
 description: Designs technical solutions from feature requests. Produces implementation blueprints with data models, API contracts, and component designs.
+isolation: worktree
 tools: [Read, Glob, Grep, Bash, Write]
 model: opus
 ---

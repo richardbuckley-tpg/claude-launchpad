@@ -105,24 +105,23 @@ Launchpad generates a complete Claude Code configuration tailored to your projec
 
 ## The Idea-to-Ship Pipeline
 
-This is the core workflow. Say `/build <feature>` and agents run in sequence:
+This is the core workflow. Say `/build <feature>` and agents run with worktree isolation and parallel execution:
 
 ```
 /idea-to-prd "user dashboard"   ←  optional first step (generates PRD)
 /build user-dashboard            ←  triggers the full pipeline:
 
   0. Read PRD (if one exists in docs/prds/)
-  1. @architect designs → writes blueprint to docs/blueprints/
-  2. @security reviews the blueprint (when auth/payments involved)
-  3. @testing writes failing tests from the blueprint spec (TDD mode)
+  1. Create git worktree (isolated workspace for the feature)
+  2. @architect designs → writes blueprint to docs/blueprints/
+  3. @security + @testing run IN PARALLEL (TDD mode)
   4. Implement until tests pass
-  5. @compliance-auditor checks domain rules (when domain is set)
-  6. @reviewer code review — must APPROVE
-  7. @pre-push full pre-flight (lint, test, build, secrets, debug code)
-  8. @push creates the PR
+  5. @compliance-auditor + @reviewer run IN PARALLEL (when domain set)
+  6. @pre-push full pre-flight (lint, test, build, secrets, debug code)
+  7. @push creates the PR, cleans up worktree
 ```
 
-The blueprint is the shared context between agents. Each step builds on the previous one.
+The blueprint is the shared context. Worktree isolation keeps your main directory clean — if the build fails, nothing to undo. Parallel agents save time where there are no data dependencies.
 
 ---
 

@@ -303,16 +303,20 @@ The full idea-to-ship pipeline:
 /build feature-name            →  Full pipeline below
 ```
 
-The `/build` command runs the development pipeline with context passing through blueprints:
+The `/build` command runs the development pipeline with git worktree isolation and parallel agents:
 
 0. **PRD** (optional) — reads PRD from `docs/prds/` if one exists
-1. **Architect** designs → writes blueprint to `docs/blueprints/`
-2. **Security** reviews the blueprint (when auth/payments involved)
-3. **Test/Implement** — TDD: tests first, then implement. Standard: implement, then test
-4. **Domain Audit** reviews against domain/compliance rules (when domain is set)
-5. **Reviewer** checks the full diff
-6. **Pre-push** runs comprehensive pre-flight checks (lint, test, build, secrets, debug code)
-7. **Push** creates the PR
+1. **Worktree** — creates isolated git worktree for the feature (disable with `--no-worktree`)
+2. **Architect** designs → writes blueprint to `docs/blueprints/`
+3. **Security + Testing** (TDD, parallel) — or Security then Implement then Testing (non-TDD)
+4. **Implement** — build until tests pass (TDD) or build from blueprint (non-TDD)
+5. **Domain Audit + Review** (parallel when domain set) — both must approve
+6. **Pre-push** — lint, test, build, secrets, debug code scan
+7. **Ship** — creates PR, cleans up worktree
+
+**Parallel execution**: Where agents have no data dependencies (e.g., security review and test writing both read the blueprint), they run simultaneously to reduce wall-clock time.
+
+**Worktree isolation**: All implementation happens in a temporary git worktree. Your main working directory stays clean. If the pipeline fails, nothing to undo — just remove the worktree.
 
 Blueprints are the shared context. The template is in `docs/blueprints/.template.md`.
 

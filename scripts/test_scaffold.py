@@ -83,6 +83,7 @@ def make_args(**overrides):
         "migrate_ai_configs": False,
         "_monorepo_info": None,
         "_dep_snapshot": None,
+        "worktree": True,
         "event_systems": [],
         "event_patterns": [],
         "schema_format": "none",
@@ -1400,14 +1401,15 @@ class TestDomainBuildPipeline(unittest.TestCase):
         content = cmd_build(domain="general", compliance=["gdpr"])
         self.assertIn("Domain Audit", content)
 
-    def test_build_has_7_steps_with_domain(self):
+    def test_build_has_ship_step_with_domain(self):
         content = cmd_build(domain="finance", compliance=["sox"])
-        self.assertIn("7.", content)
+        self.assertIn("Ship", content)
+        self.assertIn("@push", content)
 
-    def test_build_has_7_steps_without_domain(self):
+    def test_build_has_ship_step_without_domain(self):
         content = cmd_build(domain="general", compliance=["none"])
-        self.assertIn("7.", content)  # Ship (pre-push added before ship)
-        self.assertNotIn("8.", content)
+        self.assertIn("Ship", content)
+        self.assertNotIn("Domain Audit", content)
 
 
 class TestTddBuildPipeline(unittest.TestCase):
@@ -1415,7 +1417,8 @@ class TestTddBuildPipeline(unittest.TestCase):
 
     def test_tdd_tests_before_implement(self):
         content = cmd_build(tdd=True)
-        test_pos = content.index("Test (TDD)")
+        # In TDD mode, testing is in the parallel group before implement
+        test_pos = content.index("Testing")
         impl_pos = content.index("Implement")
         self.assertLess(test_pos, impl_pos, "TDD: tests should come before implement")
 
@@ -1441,7 +1444,8 @@ class TestTddBuildPipeline(unittest.TestCase):
 
     def test_tdd_with_domain(self):
         content = cmd_build(domain="finance", compliance=["sox"], tdd=True)
-        test_pos = content.index("Test (TDD)")
+        # In TDD + domain: Testing parallel group before Implement, Domain Audit parallel group after
+        test_pos = content.index("Testing")
         impl_pos = content.index("Implement")
         domain_pos = content.index("Domain Audit")
         self.assertLess(test_pos, impl_pos)
@@ -1449,14 +1453,110 @@ class TestTddBuildPipeline(unittest.TestCase):
 
     def test_tdd_step_numbering(self):
         content = cmd_build(tdd=True)
-        # TDD without domain: 7 steps (design, security, test, implement, review, ship)
+        # Steps should be numbered sequentially
         self.assertIn("3.", content)
         self.assertIn("4.", content)
 
-    def test_tdd_with_domain_step_count(self):
+    def test_tdd_with_domain_has_two_parallel_groups(self):
         content = cmd_build(domain="finance", compliance=["sox"], tdd=True)
-        # With domain: design, security, test, implement, domain-audit, review, ship = 7
-        self.assertIn("7.", content)
+        # Should have two "IN PARALLEL" groups
+        self.assertEqual(content.count("IN PARALLEL"), 2)
+
+
+class TestWorktreeBuildPipeline(unittest.TestCase):
+    """Test /build command git worktree isolation."""
+
+    def test_build_default_includes_worktree_setup(self):
+        content = cmd_build()
+        self.assertIn("Worktree", content)
+        self.assertIn("git worktree add", content)
+
+    def test_build_no_worktree_excludes_setup(self):
+        content = cmd_build(worktree=False)
+        self.assertNotIn("Worktree", content)
+        self.assertNotIn("git worktree add", content)
+
+    def test_build_worktree_cleanup_at_end(self):
+        content = cmd_build()
+        self.assertIn("worktree remove", content)
+
+    def test_build_no_worktree_no_cleanup(self):
+        content = cmd_build(worktree=False)
+        self.assertNotIn("worktree remove", content)
+
+    def test_build_worktree_creates_feature_branch(self):
+        content = cmd_build()
+        self.assertIn("feature/", content)
+
+    def test_build_worktree_has_fallback(self):
+        content = cmd_build()
+        self.assertIn("fall back", content)
+
+    def test_architect_agent_has_worktree_isolation(self):
+        args = make_args()
+        agents = get_agents(args)
+        architect = next(c for n, c in agents if n == "architect")
+        self.assertIn("isolation: worktree", architect)
+
+    def test_testing_agent_has_worktree_isolation(self):
+        args = make_args()
+        agents = get_agents(args)
+        testing = next(c for n, c in agents if n == "testing")
+        self.assertIn("isolation: worktree", testing)
+
+    def test_reviewer_agent_no_worktree_isolation(self):
+        args = make_args()
+        agents = get_agents(args)
+        reviewer = next(c for n, c in agents if n == "reviewer")
+        self.assertNotIn("isolation", reviewer)
+
+    def test_push_agent_no_worktree_isolation(self):
+        args = make_args()
+        agents = get_agents(args)
+        push = next(c for n, c in agents if n == "push")
+        self.assertNotIn("isolation", push)
+
+
+class TestParallelBuildPipeline(unittest.TestCase):
+    """Test /build command subagent parallelism."""
+
+    def test_tdd_parallel_security_and_testing(self):
+        content = cmd_build(tdd=True)
+        self.assertIn("IN PARALLEL", content)
+        self.assertIn("@security", content)
+        self.assertIn("@testing", content)
+
+    def test_tdd_parallel_gate_before_implement(self):
+        content = cmd_build(tdd=True)
+        parallel_pos = content.index("IN PARALLEL")
+        impl_pos = content.index("Implement")
+        self.assertLess(parallel_pos, impl_pos)
+
+    def test_tdd_domain_parallel_audit_and_review(self):
+        content = cmd_build(tdd=True, domain="finance", compliance=["sox"])
+        # Second parallel group has domain audit + reviewer
+        second_parallel = content.index("IN PARALLEL", content.index("IN PARALLEL") + 1)
+        self.assertIn("compliance-auditor", content[second_parallel:])
+        self.assertIn("@reviewer", content[second_parallel:])
+
+    def test_non_tdd_domain_parallel_testing_and_audit(self):
+        content = cmd_build(tdd=False, domain="finance", compliance=["sox"])
+        self.assertIn("IN PARALLEL", content)
+        self.assertIn("@testing", content)
+        self.assertIn("compliance-auditor", content)
+
+    def test_non_tdd_no_domain_no_parallel(self):
+        content = cmd_build(tdd=False, domain="general", compliance=["none"])
+        self.assertNotIn("IN PARALLEL", content)
+
+    def test_parallel_mentions_wait_for_both(self):
+        content = cmd_build(tdd=True)
+        self.assertIn("Wait for BOTH", content)
+
+    def test_parallel_mentions_blocking(self):
+        content = cmd_build(tdd=True)
+        self.assertIn("CRITICAL", content)
+        self.assertIn("stop", content.lower())
 
 
 class TestDomainScaffoldIntegration(unittest.TestCase):
