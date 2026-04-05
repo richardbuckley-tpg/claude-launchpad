@@ -467,6 +467,34 @@ get baked into the analyzer's rules, so they apply to new code automatically.
 """
 
 
+def cmd_cloud_fix():
+    return """---
+description: Check PR status and fix CI failures or review comments
+---
+
+Check and fix issues on the current PR:
+
+1. Get current branch: `git branch --show-current`
+2. Check PR status: `gh pr status`
+3. Check CI status: `gh pr checks`
+4. If CI failed:
+   - Read the failing check logs: `gh run view <run-id> --log-failed`
+   - Diagnose the failure and apply the fix
+   - Push the fix: `git push`
+5. If review comments exist:
+   - Read comments: `gh pr view --comments`
+   - Address each comment with a code change
+   - Push fixes and reply to comments
+6. Re-check: `gh pr checks` to verify fixes
+
+Rules:
+- Fix one issue at a time — commit after each fix
+- NEVER force push — always regular push
+- If a CI failure is flaky (passes on retry), note it but don't change code
+- STOP if the fix would require architectural changes — escalate to @architect
+"""
+
+
 # ── Skills ───────────────────────────────────────────────────────────────
 
 def get_skills(args):
@@ -1258,6 +1286,38 @@ def get_hooks(args):
         }]
     }]
 
+    # SessionStart: inject project context at session start
+    hooks["SessionStart"] = [{
+        "matcher": "",
+        "hooks": [{
+            "type": "command",
+            "command": "if [ -f .claude/handoff.md ]; then echo '📋 Previous session context loaded from .claude/handoff.md'; fi"
+        }]
+    }]
+
+    # PreCompact: remind to save important context before compaction
+    hooks["PreCompact"] = [{
+        "matcher": "",
+        "hooks": [{
+            "type": "command",
+            "command": "echo '💾 Context compacting — important state should be in .claude/handoff.md or docs/blueprints/'"
+        }]
+    }]
+
+    # PostToolUse: watch for dependency file changes
+    dep_watch_hook = {
+        "matcher": "Write|Edit",
+        "hooks": [{
+            "type": "command",
+            "command": JQ_GUARD + "INPUT=$(cat); F=$(echo \"$INPUT\" | jq -r '.tool_input.file_path // empty'); case \"$F\" in */package.json|*/requirements.txt|*/pyproject.toml|*/Cargo.toml|*/go.mod|*/Gemfile) echo '📦 Dependency file changed — remember to update lock file and test';; esac"
+        }]
+    }
+    # Add to existing PostToolUse hooks or create new list
+    if "PostToolUse" in hooks:
+        hooks["PostToolUse"].append(dep_watch_hook)
+    else:
+        hooks["PostToolUse"] = [dep_watch_hook]
+
     return hooks
 
 
@@ -1280,6 +1340,7 @@ description: Designs technical solutions from feature requests
 isolation: worktree
 tools: [Read, Glob, Grep, Bash, Write]
 model: opus
+effort: high
 ---
 
 You are the principal architect for a {fe}/{be} project.
@@ -1328,6 +1389,7 @@ name: reviewer
 description: Reviews code for correctness, performance, and maintainability
 tools: [Read, Glob, Grep, Bash]
 model: sonnet
+disallowedTools: [Write, Edit]
 ---
 
 You review {fe}/{be} code. Lint: `{lint_cmd}`, Test: `{test_cmd}`
@@ -1383,6 +1445,7 @@ Git lifecycle for this project:
 3. Commit: {cc_rule}
 4. Push: `git push -u origin {{branch}}`
 5. PR: `gh pr create` with summary, changes, test checklist
+6. After PR: suggest enabling cloud auto-fix if CI fails or reviewers request changes
 
 Rules:
 - NEVER force push to main/master
@@ -1399,6 +1462,7 @@ name: security
 description: Reviews code and architecture for vulnerabilities
 tools: [Read, Glob, Grep, Bash]
 model: sonnet
+disallowedTools: [Write, Edit]
 ---
 
 Security review for {fe}/{be} with auth={auth}:
@@ -1464,6 +1528,7 @@ name: idea-to-prd
 description: Researches an idea and generates a detailed PRD
 tools: [Read, Glob, Grep, Bash, Write, WebSearch, WebFetch]
 model: opus
+effort: high
 ---
 
 You are a product strategist for a {fe}/{be} project.
@@ -1497,6 +1562,7 @@ name: pre-push
 description: Comprehensive pre-flight check before pushing code
 tools: [Bash, Read, Grep, Glob]
 model: sonnet
+maxTurns: 10
 ---
 
 Run the full pre-push checklist for {fe}/{be} stack:
@@ -1527,6 +1593,7 @@ name: dev-ops
 description: Recommends infrastructure and generates starter deployment configs
 tools: [Read, Glob, Grep, Bash, Write, WebSearch, WebFetch]
 model: opus
+effort: high
 ---
 
 You are a DevOps engineer advising a {fe}/{be}/{db} project (hosting: {hosting}).
@@ -1580,6 +1647,7 @@ name: compliance-auditor
 description: Reviews code against {domain} domain rules and {compliance_list} requirements
 tools: [Read, Glob, Grep]
 model: sonnet
+disallowedTools: [Write, Edit]
 ---
 
 Domain compliance review for {domain} project ({compliance_list}):
@@ -1617,6 +1685,7 @@ name: frontend-auditor
 description: Reviews frontend code for {domain}-specific UI/UX requirements
 tools: [Read, Glob, Grep]
 model: sonnet
+disallowedTools: [Write, Edit]
 ---
 
 Frontend review for {domain} {fe} project:
@@ -1647,6 +1716,7 @@ name: architecture-auditor
 description: Reviews architecture for {domain} data handling and regulatory compliance
 tools: [Read, Glob, Grep, Bash]
 model: sonnet
+disallowedTools: [Write, Edit]
 ---
 
 Architecture review for {domain} system:
@@ -1938,6 +2008,60 @@ description: Monorepo conventions
 """))
 
     return rules
+
+
+def get_lsp_recommendations(args):
+    """Return LSP server recommendations based on detected stack."""
+    recommendations = []
+    fe = args.frontend
+    be = args.backend
+
+    # TypeScript/JavaScript projects
+    if fe in ("nextjs", "react-vite", "vue", "sveltekit") or be in ("node-express", "node-fastify", "integrated"):
+        recommendations.append({
+            "language": "TypeScript/JavaScript",
+            "server": "typescript-language-server",
+            "install": "npm install -g typescript-language-server typescript",
+            "config_note": "Ensure tsconfig.json exists at project root",
+        })
+
+    # Python projects
+    if be in ("python-fastapi", "python-django"):
+        recommendations.append({
+            "language": "Python",
+            "server": "pyright",
+            "install": "pip install pyright",
+            "config_note": "Add pyrightconfig.json for custom type checking settings",
+        })
+
+    # Go projects
+    if be == "go":
+        recommendations.append({
+            "language": "Go",
+            "server": "gopls",
+            "install": "go install golang.org/x/tools/gopls@latest",
+            "config_note": "gopls is included with the Go extension; ensure GOPATH is set",
+        })
+
+    # Rust projects
+    if be == "rust-actix":
+        recommendations.append({
+            "language": "Rust",
+            "server": "rust-analyzer",
+            "install": "rustup component add rust-analyzer",
+            "config_note": "rust-analyzer works with cargo projects automatically",
+        })
+
+    # Ruby projects
+    if be == "ruby-rails":
+        recommendations.append({
+            "language": "Ruby",
+            "server": "solargraph",
+            "install": "gem install solargraph",
+            "config_note": "Run `solargraph config` to generate .solargraph.yml",
+        })
+
+    return recommendations
 
 
 # ── Supporting file generators ───────────────────────────────────────────
@@ -2640,7 +2764,11 @@ def validate_settings(settings: dict) -> list[str]:
 
     # Validate hooks structure
     hooks = settings.get("hooks", {})
-    valid_hook_types = {"PreToolUse", "PostToolUse", "Stop", "Notification"}
+    valid_hook_types = {
+        "PreToolUse", "PostToolUse", "Stop", "Notification",
+        "SessionStart", "SubagentStop", "PreCompact",
+        "WorktreeCreate", "WorktreeRemove",
+    }
     for hook_type in hooks:
         if hook_type not in valid_hook_types:
             warnings.append(f"Unknown hook type: {hook_type}")
@@ -2800,6 +2928,7 @@ def scaffold(args):
         "build": cmd_build(getattr(args, 'domain', 'general'), getattr(args, 'compliance', ['none']), args.tdd, getattr(args, 'worktree', True)),
         "analyze": cmd_analyze(skill_path), "learn": cmd_learn(skill_path),
         "evolve": cmd_evolve(skill_path),
+        "cloud-fix": cmd_cloud_fix(),
     }
     if args.tdd:
         commands["tdd"] = cmd_tdd()
@@ -2902,6 +3031,24 @@ def scaffold(args):
         print(f"  Created {', '.join(created)}")
     if skipped:
         print(f"  Skipped existing: {', '.join(skipped)}")
+
+    # LSP recommendations
+    lsp_recs = get_lsp_recommendations(args)
+    if lsp_recs:
+        lsp_lines = ["# Language Server Protocol (LSP) Setup\n"]
+        lsp_lines.append("LSP servers provide code intelligence (completions, diagnostics, go-to-definition).\n")
+        for rec in lsp_recs:
+            lsp_lines.append(f"## {rec['language']}")
+            lsp_lines.append(f"- **Server**: {rec['server']}")
+            lsp_lines.append(f"- **Install**: `{rec['install']}`")
+            lsp_lines.append(f"- **Note**: {rec['config_note']}")
+            lsp_lines.append("")
+        lsp_content = "\n".join(lsp_lines)
+        lsp_path = project_dir / "docs" / "lsp-setup.md"
+        result = safe_write(lsp_path, lsp_content, force, dry_run=dry_run)
+        if result != "skipped":
+            created_files.append("docs/lsp-setup.md")
+            print(f"  Created docs/lsp-setup.md ({len(lsp_recs)} LSP servers recommended)")
 
     # 5. MCP servers + hooks
     mcp_servers = get_mcp_servers(args)

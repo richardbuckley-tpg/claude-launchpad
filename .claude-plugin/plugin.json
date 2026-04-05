@@ -1,0 +1,15 @@
+{
+  "name": "claude-launchpad",
+  "version": "6.0.0",
+  "description": "Bootstrap any project with a complete Claude Code configuration — agents, commands, rules, hooks, MCP servers, and CI/CD — all customized to your stack.",
+  "author": "richardbuckley-tpg",
+  "license": "MIT",
+  "scope": "user",
+  "skills": ["SKILL.md"],
+  "commands": [],
+  "hooks": [],
+  "requiredTools": ["Bash", "Read", "Write", "Edit", "Glob", "Grep"],
+  "minClaudeCodeVersion": "1.0.0",
+  "repository": "https://github.com/richardbuckley-tpg/claude-launchpad",
+  "keywords": ["bootstrap", "scaffold", "setup", "project-init", "agents", "config"]
+}

@@ -10,11 +10,17 @@ The ultimate bootstrapper for [Claude Code](https://docs.anthropic.com/en/docs/c
 
 ### 1. Install (30 seconds)
 
+**As a skill (recommended):**
 ```bash
 git clone https://github.com/richardbuckley-tpg/claude-launchpad.git ~/.claude/skills/claude-launchpad
 ```
 
-This installs Launchpad as a global Claude Code skill. Requires Python 3.10+ (stdlib only, no pip install needed).
+**As a plugin (if your Claude Code version supports plugins):**
+```bash
+claude plugin install github:richardbuckley-tpg/claude-launchpad
+```
+
+Requires Python 3.10+ (stdlib only, no pip install needed).
 
 ### 2. Bootstrap (5 minutes)
 

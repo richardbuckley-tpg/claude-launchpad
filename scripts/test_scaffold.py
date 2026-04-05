@@ -27,6 +27,7 @@ from scaffold import (
     get_hooks,
     get_agents,
     get_rules,
+    get_lsp_recommendations,
     get_claudeignore,
     get_env_example,
     get_handoff,
@@ -42,6 +43,7 @@ from scaffold import (
     upgrade,
     scaffold,
     cmd_build,
+    cmd_cloud_fix,
 )
 
 
@@ -456,8 +458,11 @@ class TestGetHooks(unittest.TestCase):
     def test_lint_cmd_rejected_if_unsafe(self):
         args = make_args(lint_cmd="rm -rf /")
         hooks = get_hooks(args)
-        # Should NOT have PostToolUse hooks (unsafe command rejected)
-        self.assertNotIn("PostToolUse", hooks)
+        # Should NOT have lint PostToolUse hooks (unsafe command rejected)
+        # PostToolUse may still exist from dep watch hook
+        post_hooks = hooks.get("PostToolUse", [])
+        lint_hooks = [h for h in post_hooks if "rm -rf" in str(h)]
+        self.assertEqual(len(lint_hooks), 0)
 
     def test_lint_cmd_accepted_if_safe(self):
         args = make_args(lint_cmd="npm run lint")
@@ -498,7 +503,10 @@ class TestGetHooks(unittest.TestCase):
     def test_test_cmd_requires_tdd_flag(self):
         args = make_args(tdd=False, test_cmd="npm run test")
         hooks = get_hooks(args)
-        self.assertNotIn("PostToolUse", hooks)
+        # PostToolUse may exist from dep watch hook, but should not have test hook
+        post_hooks = hooks.get("PostToolUse", [])
+        test_hooks = [h for h in post_hooks if "npm run test" in str(h)]
+        self.assertEqual(len(test_hooks), 0)
 
     def test_test_cmd_with_tdd_flag(self):
         args = make_args(tdd=True, test_cmd="npm run test")
@@ -1894,6 +1902,190 @@ class TestEventSystemScaffold(unittest.TestCase):
         scaffold(args)
         rules_dir = self.tmpdir / "test-app" / ".claude" / "rules"
         self.assertTrue((rules_dir / "event-patterns.md").exists())
+
+
+class TestAgentFrontmatter(unittest.TestCase):
+    """Tests for enriched agent frontmatter fields."""
+
+    def setUp(self):
+        self.args = make_args()
+
+    def test_architect_has_effort_high(self):
+        agents = dict(get_agents(self.args))
+        self.assertIn("effort: high", agents["architect"])
+
+    def test_reviewer_has_disallowed_tools(self):
+        agents = dict(get_agents(self.args))
+        self.assertIn("disallowedTools: [Write, Edit]", agents["reviewer"])
+
+    def test_security_has_disallowed_tools(self):
+        self.args.auth = "clerk"
+        agents = dict(get_agents(self.args))
+        self.assertIn("disallowedTools: [Write, Edit]", agents["security"])
+
+    def test_pre_push_has_max_turns(self):
+        agents = dict(get_agents(self.args))
+        self.assertIn("maxTurns: 10", agents["pre-push"])
+
+    def test_idea_to_prd_has_effort_high(self):
+        agents = dict(get_agents(self.args))
+        self.assertIn("effort: high", agents["idea-to-prd"])
+
+    def test_dev_ops_has_effort_high(self):
+        agents = dict(get_agents(self.args))
+        self.assertIn("effort: high", agents["dev-ops"])
+
+    def test_compliance_auditor_has_disallowed_tools(self):
+        self.args.domain = "finance"
+        agents = dict(get_agents(self.args))
+        self.assertIn("disallowedTools: [Write, Edit]", agents["compliance-auditor"])
+
+    def test_frontend_auditor_has_disallowed_tools(self):
+        self.args.domain = "finance"
+        self.args.frontend = "nextjs"
+        agents = dict(get_agents(self.args))
+        self.assertIn("disallowedTools: [Write, Edit]", agents["frontend-auditor"])
+
+    def test_architecture_auditor_has_disallowed_tools(self):
+        self.args.domain = "finance"
+        agents = dict(get_agents(self.args))
+        self.assertIn("disallowedTools: [Write, Edit]", agents["architecture-auditor"])
+
+
+class TestNewHookEvents(unittest.TestCase):
+    """Tests for new hook event types."""
+
+    def setUp(self):
+        self.args = make_args()
+
+    def test_session_start_hook_exists(self):
+        hooks = get_hooks(self.args)
+        self.assertIn("SessionStart", hooks)
+
+    def test_session_start_checks_handoff(self):
+        hooks = get_hooks(self.args)
+        cmd = hooks["SessionStart"][0]["hooks"][0]["command"]
+        self.assertIn("handoff.md", cmd)
+
+    def test_pre_compact_hook_exists(self):
+        hooks = get_hooks(self.args)
+        self.assertIn("PreCompact", hooks)
+
+    def test_pre_compact_mentions_context(self):
+        hooks = get_hooks(self.args)
+        cmd = hooks["PreCompact"][0]["hooks"][0]["command"]
+        self.assertIn("compacting", cmd)
+
+    def test_dependency_watch_hook_exists(self):
+        hooks = get_hooks(self.args)
+        self.assertIn("PostToolUse", hooks)
+        matchers = [h.get("matcher", "") for h in hooks["PostToolUse"]]
+        self.assertTrue(any("Write" in m for m in matchers))
+
+    def test_dependency_watch_detects_package_json(self):
+        hooks = get_hooks(self.args)
+        post_hooks = hooks["PostToolUse"]
+        dep_hook = [h for h in post_hooks if "package.json" in str(h)]
+        self.assertTrue(len(dep_hook) > 0)
+
+    def test_validate_settings_accepts_new_hook_types(self):
+        settings = {"hooks": {
+            "SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "echo hi"}]}],
+            "PreCompact": [{"matcher": "", "hooks": [{"type": "command", "command": "echo hi"}]}],
+        }}
+        warnings = validate_settings(settings)
+        self.assertEqual(len(warnings), 0, f"Got unexpected warnings: {warnings}")
+
+    def test_validate_settings_rejects_unknown_hook_type(self):
+        settings = {"hooks": {"FakeHook": [{"matcher": "", "hooks": [{"type": "command", "command": "echo"}]}]}}
+        warnings = validate_settings(settings)
+        self.assertTrue(any("FakeHook" in w for w in warnings))
+
+
+class TestCloudFix(unittest.TestCase):
+    """Tests for cloud auto-fix integration."""
+
+    def setUp(self):
+        self.args = make_args()
+
+    def test_push_agent_mentions_cloud_auto_fix(self):
+        agents = dict(get_agents(self.args))
+        self.assertIn("cloud auto-fix", agents["push"])
+
+    def test_cloud_fix_command_exists(self):
+        content = cmd_cloud_fix()
+        self.assertIn("CI", content)
+        self.assertIn("gh pr", content)
+
+    def test_cloud_fix_command_registered(self):
+        """Cloud-fix command should be in the generated commands."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self.args.output_dir = tmp
+            self.args.create_root = True
+            scaffold(self.args)
+            cmd_path = Path(tmp) / self.args.project_name / ".claude" / "commands" / "cloud-fix.md"
+            self.assertTrue(cmd_path.exists(), "cloud-fix.md should be created")
+
+    def test_cloud_fix_has_rules(self):
+        content = cmd_cloud_fix()
+        self.assertIn("NEVER force push", content)
+        self.assertIn("STOP", content)
+
+
+class TestLSPRecommendations(unittest.TestCase):
+    """Tests for LSP server recommendations."""
+
+    def setUp(self):
+        self.args = make_args()
+
+    def test_nextjs_gets_typescript_lsp(self):
+        self.args.frontend = "nextjs"
+        recs = get_lsp_recommendations(self.args)
+        servers = [r["server"] for r in recs]
+        self.assertIn("typescript-language-server", servers)
+
+    def test_fastapi_gets_pyright(self):
+        self.args.frontend = "none"
+        self.args.backend = "python-fastapi"
+        recs = get_lsp_recommendations(self.args)
+        servers = [r["server"] for r in recs]
+        self.assertIn("pyright", servers)
+
+    def test_go_gets_gopls(self):
+        self.args.frontend = "none"
+        self.args.backend = "go"
+        recs = get_lsp_recommendations(self.args)
+        servers = [r["server"] for r in recs]
+        self.assertIn("gopls", servers)
+
+    def test_rust_gets_rust_analyzer(self):
+        self.args.frontend = "none"
+        self.args.backend = "rust-actix"
+        recs = get_lsp_recommendations(self.args)
+        servers = [r["server"] for r in recs]
+        self.assertIn("rust-analyzer", servers)
+
+    def test_rails_gets_solargraph(self):
+        self.args.frontend = "none"
+        self.args.backend = "ruby-rails"
+        recs = get_lsp_recommendations(self.args)
+        servers = [r["server"] for r in recs]
+        self.assertIn("solargraph", servers)
+
+    def test_no_backend_no_recs(self):
+        self.args.frontend = "none"
+        self.args.backend = "none"
+        recs = get_lsp_recommendations(self.args)
+        self.assertEqual(len(recs), 0)
+
+    def test_fullstack_gets_typescript(self):
+        self.args.frontend = "nextjs"
+        self.args.backend = "integrated"
+        recs = get_lsp_recommendations(self.args)
+        servers = [r["server"] for r in recs]
+        self.assertIn("typescript-language-server", servers)
+        # Should not duplicate
+        self.assertEqual(servers.count("typescript-language-server"), 1)
 
 
 if __name__ == "__main__":
