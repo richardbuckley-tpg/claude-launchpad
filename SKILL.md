@@ -3,11 +3,13 @@ name: claude-launchpad
 description: >
   Lean, token-optimized Claude Code bootstrapper. Conducts a structured interview, then generates
   a complete .claude/ configuration — CLAUDE.md (≤100 lines), 10-15 agents (≤30 lines each), path-scoped
-  rules, hooks, 8-14 skills, 9-18 slash commands, MCP config, and session handoff — all with real values,
-  not placeholders. Includes a unique Config Auditor that scores any .claude/ setup for health, token
-  cost, and staleness. Use when someone says "start a project", "bootstrap", "scaffold", "set up
-  Claude Code", "init project", "new app", or wants to add Claude Code to an existing codebase.
-  Also use when someone says "audit my config", "check my claude setup", or "optimize my claude config".
+  rules, hooks, 8-14 skills, 15-20 slash commands, MCP config, and session handoff — all with real values,
+  not placeholders. Includes a Config Auditor that scores any .claude/ setup for health, token cost,
+  and staleness, plus a Deep Review mode that produces comprehensive codebase assessments.
+  Use when someone says "start a project", "bootstrap", "scaffold", "set up Claude Code", "init project",
+  "new app", or wants to add Claude Code to an existing codebase.
+  Also use when someone says "audit my config", "check my claude setup", "review my codebase",
+  "deep review", or "optimize my claude config".
 ---
 
 # Claude Launchpad — Lean, Token-Optimized Claude Code Setup
@@ -33,7 +35,20 @@ no cargo-cult config. Everything contains real values from the interview.
 - **Learn** — Record corrections, analyze git history for mistake patterns
 
 If the user asks to audit, skip to the Audit section. If they ask to analyze, use the Analyzer.
+If they ask for a "deep review", "codebase review", or "project assessment", use the Deep Review mode below.
 Otherwise, start the interview.
+
+### Deep Review Mode
+
+When the user asks for a deep review of their existing project:
+
+1. Run the scaffolder with `--analyze --deep` to get enhanced analysis data
+2. After scaffolding, tell the user to restart Claude Code and run `/deep-review`
+3. `/deep-review` orchestrates a 7-phase assessment: automated analysis → architecture → code quality → security → testing → debt/docs → report
+4. Output: `docs/project-review.md` with health score, detailed findings, and prioritized recommendations
+5. Offer to update ARCHITECTURE.md with real data from the review
+
+This is the recommended flow for existing projects that want comprehensive understanding, not just scaffolding.
 
 ---
 
@@ -293,6 +308,7 @@ Show the health score and token estimate. Then act on the score:
 5. **Important**: Tell the user to restart Claude Code so it discovers the new commands and agents.
    Slash commands are loaded at startup — they won't appear until Claude Code is reopened.
 6. Suggest next steps (after restart):
+   - `/deep-review` to get a comprehensive codebase assessment (recommended for existing projects)
    - `/build <feature>` to start building with the full agent pipeline
    - `/analyze` to extract more patterns as code grows
    - `/learn <correction>` to teach Claude project-specific preferences

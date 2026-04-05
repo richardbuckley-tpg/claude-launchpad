@@ -172,6 +172,8 @@ Claude: Analyzes your code first, asks about gaps
 
 The analyzer reads your source code and generates targeted rules. Instead of "use Server Components by default" (generic), you get "this project uses `AppError` from `src/lib/errors.ts` for all error handling — never throw generic Error" (specific).
 
+After scaffolding, run `/deep-review` for a comprehensive codebase assessment — architecture, code quality, security, testing health, and prioritized recommendations.
+
 ---
 
 ## Key Features
@@ -232,6 +234,26 @@ For regulated industries, add `--domain` and `--compliance`:
 
 Compliance frameworks (GDPR, SOX, HIPAA, PCI-DSS) can be combined. A UK fintech gets GDPR + SOX + PCI-DSS rules automatically.
 
+### Deep Review
+
+For existing projects, get a comprehensive codebase assessment:
+
+```
+/deep-review
+```
+
+Runs a 7-phase analysis combining automated detection with Claude's semantic understanding:
+
+1. **Automated Analysis** — entry points, API surface, complexity hotspots, test coverage map, config/env
+2. **Architecture Assessment** — layering, data flows, coupling, separation of concerns
+3. **Code Quality** — anti-patterns, consistency, large file review
+4. **Security Posture** — auth coverage per endpoint, input validation, secrets
+5. **Testing Health** — coverage ratio, test quality, critical gaps
+6. **Tech Debt & Documentation** — TODO/FIXME counts, doc coverage, staleness
+7. **Report** — produces `docs/project-review.md` with health score, findings, and prioritized recommendations
+
+Use `--analyze --deep` during scaffolding for an enhanced ARCHITECTURE.md that replaces stubs with real data from the analysis (actual error handling patterns, auth flows, entry points, API surface, environment variables).
+
 ### Feedback Loop
 
 ```
@@ -270,6 +292,14 @@ For existing projects, the analyzer goes beyond stack detection:
 - **AI configs** — migrates .cursorrules, copilot-instructions.md, .windsurfrules
 - **Dependency drift** — snapshots deps, flags changes on subsequent audits
 - **Code patterns** — error handling, auth middleware, validation, data fetching, testing conventions, API patterns, key abstractions
+
+With `--deep`, the analyzer also detects:
+
+- **Entry points** — server starts, CLI entries, framework-specific entry files
+- **API surface** — all routes/endpoints with HTTP methods (Express, Next.js, FastAPI, Django, Go, Rails, GraphQL, tRPC)
+- **Complexity indicators** — large files, function counts, size distribution
+- **Test coverage map** — which source files have tests, coverage ratio, untested directories
+- **Config & environment** — env var references across the codebase, config files, .env patterns
 
 ---
 
@@ -310,6 +340,7 @@ Key flags:
 
 ```bash
 python scripts/analyze.py /path/to/project                      # Print report
+python scripts/analyze.py /path/to/project --deep               # Deep analysis (entry points, API, complexity, coverage)
 python scripts/analyze.py /path/to/project --write-rules        # Write rules
 python scripts/analyze.py /path/to/project --incorporate-learned # Merge corrections
 python scripts/analyze.py /path/to/project --check-stale        # Find stale refs
