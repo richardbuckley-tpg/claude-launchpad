@@ -57,7 +57,7 @@ Launchpad generates a complete Claude Code configuration tailored to your projec
 | What | Count | Purpose |
 |------|-------|---------|
 | **Agents** | 10-15 | Specialized AI teammates — architect, tester, reviewer, refactorer, docs-generator, and more |
-| **Slash Commands** | 14-18 | `/build`, `/learn`, `/evolve`, `/audit`, `/debt`, `/decision`, `/refactor`, and more |
+| **Slash Commands** | 14-19 | `/build`, `/learn`, `/evolve`, `/audit`, `/debt`, `/decision`, `/refactor`, and more |
 | **Rules** | 2-5 | Path-scoped conventions (e.g., Next.js rules only apply to `src/app/**/*.tsx`) |
 | **Skills** | 8-13 | Code generation templates for your specific stack + domain knowledge |
 | **Hooks** | 4-6 | Auto-lint on save, auto-test (TDD), force-push block, secret detection |
@@ -114,6 +114,7 @@ Launchpad generates a complete Claude Code configuration tailored to your projec
 | `/resume-build` | Resume an interrupted `/build` pipeline from last completed stage |
 | `/cloud-fix` | Fix CI failures or review comments on current PR |
 | `/tdd <feature>` | Red-green-refactor cycle (when `--tdd` is set) |
+| `/setup-teams` | Enable Agent Teams for parallel multi-agent workflows (when `--agent-teams` is set) |
 
 ---
 
@@ -136,6 +137,8 @@ This is the core workflow. Say `/build <feature>` and agents run with worktree i
 ```
 
 The blueprint is the shared context. Worktree isolation keeps your main directory clean — if the build fails, nothing to undo. Parallel agents save time where there are no data dependencies.
+
+**Agent Teams mode** (experimental): With `--agent-teams`, the `/build` pipeline uses Claude Code Agent Teams — each agent runs as an independent session with direct messaging and shared task lists, enabling true parallel execution instead of text-based coordination.
 
 ---
 
@@ -296,6 +299,7 @@ Key flags:
 - `--dry-run` — Preview without writing
 - `--verify` — Post-scaffold verification
 - `--migrate-ai-configs` — Import .cursorrules etc.
+- `--agent-teams` — Use Agent Teams for `/build` pipeline (experimental)
 
 </details>
 
@@ -339,7 +343,7 @@ python scripts/audit.py /path/to/project --json         # JSON output
 ## Development
 
 ```bash
-# Run all tests (441 tests, stdlib only)
+# Run all tests (540 tests, stdlib only)
 cd scripts/
 python -m pytest test_scaffold.py test_audit.py test_analyze.py test_learn.py -v
 ```

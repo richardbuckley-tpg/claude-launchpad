@@ -50,6 +50,8 @@ from scaffold import (
     cmd_debt,
     cmd_decision,
     cmd_resume_build,
+    cmd_build_teams,
+    cmd_setup_teams,
 )
 
 
@@ -92,6 +94,7 @@ def make_args(**overrides):
         "_monorepo_info": None,
         "_dep_snapshot": None,
         "worktree": True,
+        "agent_teams": False,
         "event_systems": [],
         "event_patterns": [],
         "schema_format": "none",
@@ -2336,6 +2339,82 @@ class TestArchitectureDecisionRecords(unittest.TestCase):
         arch = get_architecture_md(args)
         self.assertIn("Architecture Decision Records", arch)
         self.assertIn("docs/decisions/", arch)
+
+
+class TestAgentTeams(unittest.TestCase):
+    """Tests for Agent Teams (P6) support."""
+
+    def test_build_teams_has_team_roster(self):
+        content = cmd_build_teams()
+        self.assertIn("Team roster", content)
+        self.assertIn("architect", content)
+        self.assertIn("testing", content)
+        self.assertIn("reviewer", content)
+
+    def test_build_teams_has_env_prerequisite(self):
+        content = cmd_build_teams()
+        self.assertIn("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", content)
+
+    def test_build_teams_has_parallel_phases(self):
+        content = cmd_build_teams()
+        self.assertIn("Parallel review phase", content)
+        self.assertIn("Parallel audit phase", content)
+
+    def test_build_teams_has_communication_patterns(self):
+        content = cmd_build_teams()
+        self.assertIn("Broadcast", content)
+        self.assertIn("Direct", content)
+        self.assertIn("Escalation", content)
+
+    def test_build_teams_tdd_adds_security(self):
+        content = cmd_build_teams(tdd=True)
+        self.assertIn("security", content)
+        self.assertIn("TDD", content)
+
+    def test_build_teams_domain_adds_compliance(self):
+        content = cmd_build_teams(domain="finance", compliance=["sox"])
+        self.assertIn("compliance-auditor", content)
+        self.assertIn("Audit the implementation for domain compliance", content)
+
+    def test_build_teams_no_domain_no_compliance(self):
+        content = cmd_build_teams(domain="general", compliance=["none"])
+        self.assertNotIn("compliance-auditor", content)
+
+    def test_setup_teams_command_content(self):
+        content = cmd_setup_teams()
+        self.assertIn("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", content)
+        self.assertIn("Enable Agent Teams", content)
+
+    def test_setup_teams_registered_when_flag_set(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = make_args(output_dir=tmp, create_root=True, agent_teams=True)
+            scaffold(args)
+            cmd_path = Path(tmp) / args.project_name / ".claude" / "commands" / "setup-teams.md"
+            self.assertTrue(cmd_path.exists())
+
+    def test_setup_teams_not_registered_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = make_args(output_dir=tmp, create_root=True)
+            scaffold(args)
+            cmd_path = Path(tmp) / args.project_name / ".claude" / "commands" / "setup-teams.md"
+            self.assertFalse(cmd_path.exists())
+
+    def test_build_uses_teams_when_flag_set(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = make_args(output_dir=tmp, create_root=True, agent_teams=True)
+            scaffold(args)
+            build_path = Path(tmp) / args.project_name / ".claude" / "commands" / "build.md"
+            content = build_path.read_text()
+            self.assertIn("Agent Teams", content)
+            self.assertIn("Team roster", content)
+
+    def test_build_uses_standard_when_no_flag(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = make_args(output_dir=tmp, create_root=True)
+            scaffold(args)
+            build_path = Path(tmp) / args.project_name / ".claude" / "commands" / "build.md"
+            content = build_path.read_text()
+            self.assertNotIn("Team roster", content)
 
 
 if __name__ == "__main__":

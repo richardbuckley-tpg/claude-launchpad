@@ -443,6 +443,113 @@ Update `.claude/handoff.md` after completion.
 """
 
 
+def cmd_build_teams(domain="general", compliance=None, tdd=False):
+    """Generate team-based build pipeline using Claude Code Agent Teams."""
+    has_domain = domain != "general"
+    has_compliance = compliance and compliance != ['none'] and 'none' not in compliance
+    has_domain_audit = has_domain or has_compliance
+
+    # Build the teammate roster based on configuration
+    teammates = ["architect", "testing", "reviewer", "pre-push", "push"]
+    if tdd:
+        teammates.insert(1, "security")  # security reviews before testing
+    if has_domain_audit:
+        teammates.append("compliance-auditor")
+
+    teammates_str = ", ".join(teammates)
+
+    # TDD test description
+    test_approach = "Write failing tests FIRST (TDD) — tests define the contract" if tdd else "Write tests based on the blueprint"
+
+    # Domain audit step
+    domain_step = ""
+    if has_domain_audit:
+        domain_step = """
+- Send to @compliance-auditor: "Audit the implementation for domain compliance"
+  - Wait for COMPLIANT result before proceeding"""
+
+    return f"""---
+description: Full feature pipeline using Agent Teams — parallel teammates with direct coordination
+---
+
+Feature: $ARGUMENTS
+
+**Prerequisites**: Agent Teams must be enabled:
+```
+export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+```
+
+This pipeline uses Agent Teams for true parallel execution. Each teammate is an independent
+Claude Code session that coordinates through a shared task list and direct messaging.
+
+**Team roster**: {teammates_str}
+
+### Pipeline
+
+1. **Create team and assign work**:
+   - Create a shared task list for "$ARGUMENTS"
+   - Send to @architect: "Design the $ARGUMENTS feature — write blueprint to docs/blueprints/"
+   - Wait for architect to complete and post the blueprint
+
+2. **Parallel review phase** — assign these tasks simultaneously:
+   - Send to @security: "Review the blueprint for $ARGUMENTS"
+   - Send to @testing: "{test_approach} for $ARGUMENTS"
+   - Both teammates work independently and message you when done
+   - If @security finds CRITICAL issues, message @testing to stop
+
+3. **Implement**:
+   - Read the blueprint AND test results from teammates
+   - Build until all tests pass
+   - Follow existing patterns (check `.claude/rules/`)
+
+4. **Parallel audit phase** — assign simultaneously:{domain_step}
+   - Send to @reviewer: "Review all changes for $ARGUMENTS"
+   - Wait for ALL to complete — any blocker stops the pipeline
+
+5. **Pre-flight + Ship**:
+   - Send to @pre-push: "Run pre-push checks"
+   - If READY, send to @push: "Create PR for $ARGUMENTS"
+
+### Team communication patterns
+- **Broadcast**: Message all teammates when the blueprint is ready
+- **Direct**: Message specific teammates when their input is needed
+- **Escalation**: If any teammate finds a blocking issue, they message you (team lead) directly
+- **Shutdown**: After PR is created, gracefully shut down all teammates
+
+Update `.claude/handoff.md` after completion.
+"""
+
+
+def cmd_setup_teams():
+    return """---
+description: Enable Agent Teams for parallel multi-agent workflows
+---
+
+Set up Claude Code Agent Teams:
+
+1. **Check current status**:
+   - Run: `echo $CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`
+   - If already set to "1", teams are enabled — skip to step 3
+
+2. **Enable Agent Teams** (one of):
+   - For current session: `export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`
+   - Permanently: Add to your shell profile (~/.zshrc or ~/.bashrc):
+     ```
+     export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+     ```
+   - Restart Claude Code after changing shell profile
+
+3. **Verify**: Teams are working when you can see teammate sessions
+   - Try: "Create a team with @architect and @testing"
+   - You should see separate teammate sessions spawn
+
+**Note**: Agent Teams is experimental. If you experience issues, disable with:
+`unset CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`
+
+For team-based builds, use `/build` (auto-detects teams when enabled).
+"""
+
+
 def cmd_analyze(skill_path):
     return f"""---
 description: Analyze codebase and generate project-specific rules
@@ -3118,7 +3225,7 @@ def scaffold(args):
         "new-feature": cmd_new_feature(), "fix-bug": cmd_fix_bug(),
         "idea-to-prd": cmd_idea_to_prd(),
         "audit": cmd_audit(skill_path),
-        "build": cmd_build(getattr(args, 'domain', 'general'), getattr(args, 'compliance', ['none']), args.tdd, getattr(args, 'worktree', True)),
+        "build": cmd_build_teams(getattr(args, 'domain', 'general'), getattr(args, 'compliance', ['none']), args.tdd) if getattr(args, 'agent_teams', False) else cmd_build(getattr(args, 'domain', 'general'), getattr(args, 'compliance', ['none']), args.tdd, getattr(args, 'worktree', True)),
         "analyze": cmd_analyze(skill_path), "learn": cmd_learn(skill_path),
         "evolve": cmd_evolve(skill_path),
         "cloud-fix": cmd_cloud_fix(),
@@ -3130,6 +3237,8 @@ def scaffold(args):
         commands["tdd"] = cmd_tdd()
     if args.team:
         commands["pipeline"] = cmd_pipeline()
+    if getattr(args, 'agent_teams', False):
+        commands["setup-teams"] = cmd_setup_teams()
     # Handle renamed commands from previous versions
     RENAMED_COMMANDS = {"status": "project-status"}
     for old_name, new_name in RENAMED_COMMANDS.items():
@@ -3503,6 +3612,7 @@ def main():
     p.add_argument("--team", action="store_true")
     p.add_argument("--tdd", action="store_true")
     p.add_argument("--no-worktree", action="store_false", dest="worktree", help="Disable git worktree isolation for /build")
+    p.add_argument("--agent-teams", action="store_true", dest="agent_teams", help="Use Claude Code Agent Teams for /build pipeline (experimental)")
     p.add_argument("--conventional-commits", action="store_true")
     p.add_argument("--lint-cmd", default=None, help="Lint command (e.g., 'npm run lint')")
     p.add_argument("--test-cmd", default=None, help="Test command (e.g., 'npm run test')")

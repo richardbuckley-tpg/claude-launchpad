@@ -178,7 +178,7 @@ python <skill-path>/scripts/scaffold.py \
   [--domain "{domain}"] [--compliance {compliance...}] \
   [--event-systems {event_systems...}] [--event-patterns {event_patterns...}] \
   [--schema-format "{schema_format}"] [--workflow-orchestration "{workflow_orchestration}"] \
-  [--team] [--tdd] [--conventional-commits] [--ai] [--sentry] \
+  [--team] [--tdd] [--agent-teams] [--conventional-commits] [--ai] [--sentry] \
   [--context7] [--sequential-thinking] [--minimal-mcp] \
   [--lint-cmd "{lint_cmd}"] [--test-cmd "{test_cmd}"] \
   [--dev-cmd "{dev_cmd}"] [--build-cmd "{build_cmd}"] \
@@ -317,6 +317,8 @@ The `/build` command runs the development pipeline with git worktree isolation a
 **Parallel execution**: Where agents have no data dependencies (e.g., security review and test writing both read the blueprint), they run simultaneously to reduce wall-clock time.
 
 **Worktree isolation**: All implementation happens in a temporary git worktree. Your main working directory stays clean. If the pipeline fails, nothing to undo — just remove the worktree.
+
+**Agent Teams** (experimental, `--agent-teams`): Uses Claude Code Agent Teams for the `/build` pipeline — each agent runs as an independent session with direct messaging and shared task lists, enabling true parallel execution. Requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`. Use `/setup-teams` to enable.
 
 Blueprints are the shared context. The template is in `docs/blueprints/.template.md`.
 
