@@ -550,6 +550,176 @@ For team-based builds, use `/build` (auto-detects teams when enabled).
 """
 
 
+def cmd_deep_review(skill_path):
+    """Generate deep codebase review command."""
+    return f"""---
+description: Run a comprehensive codebase review and generate a detailed project assessment
+---
+
+Feature: Deep Review of $ARGUMENTS (or current project if no arguments)
+
+Run a structured multi-phase deep review of this codebase. This combines automated analysis
+with your own semantic understanding to produce `docs/project-review.md`.
+
+## Phase 1: Automated Analysis
+
+Run the deep analyzer to gather quantitative data:
+
+```bash
+python3 {skill_path}/scripts/analyze.py . --deep --json > /tmp/deep-analysis.json
+```
+
+Read the JSON output. This gives you: stack detection, patterns, entry points, API surface,
+complexity indicators, test coverage map, and config/env data. Keep this data for all phases.
+
+## Phase 2: Architecture Assessment
+
+Using the analysis data AND your own reading of the codebase:
+
+1. Read the entry points identified in Phase 1 to understand how the app boots
+2. Trace 2-3 representative data flows: pick key user journeys and follow the code path
+   from entry point → middleware → handler → service → database → response
+3. Assess layering: Are concerns separated? Is there clear separation between
+   transport (HTTP/events), business logic, and data access?
+4. Check coupling: Do modules depend on each other's internals? Circular imports?
+5. Read ARCHITECTURE.md and README.md if they exist — note gaps between docs and reality
+
+Summarize: architecture patterns, layering quality, coupling assessment, key data flows.
+
+## Phase 3: Code Quality
+
+Using complexity data from Phase 1 AND your own reading:
+
+1. Review the large files (>300 lines) — are they justifiably large or need splitting?
+2. Check deeply nested code — is the nesting warranted or should it be refactored?
+3. Spot-check 5-10 files for consistency: naming, error handling, logging, comments
+4. Look for anti-patterns: god objects, feature envy, shotgun surgery, copy-paste code
+5. Assess type safety: is TypeScript strict? Are Python type hints used?
+
+Summarize: consistency assessment, anti-patterns found, files needing attention.
+
+## Phase 4: Security Posture
+
+Using the analysis data (auth patterns, env config, API surface) AND your own reading:
+
+1. Check every API endpoint from Phase 1: does it have auth middleware applied?
+2. Review input validation: do all endpoints validate/sanitize input?
+3. Check for hardcoded secrets (the analysis flags potential ones)
+4. Review error responses: do they leak stack traces or internal details?
+5. Check dependency security: look for known vulnerable patterns
+
+Summarize: auth coverage %, validation coverage, secrets issues, error handling safety.
+
+## Phase 5: Testing Health
+
+Using the test coverage map from Phase 1 AND your own reading:
+
+1. Report coverage ratio and untested directories from the analysis
+2. Read 3-5 test files to assess quality: do they test behavior or implementation?
+   Are edge cases covered? Is mocking appropriate or excessive?
+3. Check for test anti-patterns: interdependence, flaky patterns, no assertions
+4. Identify critical untested code (auth, payments, data mutations)
+
+Summarize: coverage ratio, quality assessment, critical gaps.
+
+## Phase 6: Tech Debt & Documentation
+
+1. Search for TODO/FIXME/HACK/XXX markers — group by severity and area
+2. Check for deprecated API usage, outdated patterns, legacy code
+3. Assess documentation: README explains setup? Complex modules have comments?
+   Public APIs documented (JSDoc/docstrings)?
+4. Check config files for staleness: significantly outdated dependencies?
+
+Summarize: debt count and severity, documentation coverage, staleness indicators.
+
+## Phase 7: Write the Report
+
+Create `docs/project-review.md`:
+
+```markdown
+# Project Review — [project name]
+
+**Reviewed**: [date]
+
+## Executive Summary
+
+**Health Score**: [0-100]
+
+| Area | Rating | Key Finding |
+|------|--------|-------------|
+| Architecture | [Good/Fair/Poor] | [one line] |
+| Code Quality | [Good/Fair/Poor] | [one line] |
+| Security | [Good/Fair/Poor] | [one line] |
+| Testing | [Good/Fair/Poor] | [one line] |
+| Documentation | [Good/Fair/Poor] | [one line] |
+
+**Strengths**: [2-3 bullets]
+**Risks**: [2-3 bullets]
+
+## Architecture
+### Stack
+[from analysis]
+### Entry Points
+[list with descriptions]
+### Data Flows
+[2-3 key flows with mermaid diagrams]
+### Layering Assessment
+[separation of concerns analysis]
+### API Surface
+[endpoint count, style, organization]
+
+## Code Quality
+### Complexity
+[large files, nesting, function counts]
+### Consistency
+[naming, patterns, error handling]
+### Anti-Patterns
+[specific instances with file:line]
+
+## Security
+### Auth Coverage
+[protected vs unprotected endpoints]
+### Input Validation
+[coverage assessment]
+### Secrets & Config
+[env var handling, hardcoded values]
+
+## Testing
+### Coverage Map
+[ratio, covered/uncovered modules]
+### Test Quality
+[behavior vs implementation, edge cases]
+### Critical Gaps
+[most important untested code]
+
+## Technical Debt
+### Markers
+[TODO/FIXME/HACK counts]
+### Deprecated Patterns
+[outdated items]
+
+## Documentation
+### Current State
+[what exists]
+### Gaps
+[what's missing]
+
+## Recommendations
+1. **[Critical]** [recommendation]
+2. **[High]** [recommendation]
+3. **[Medium]** [recommendation]
+...
+```
+
+After writing the report, show the executive summary and offer to:
+- Update ARCHITECTURE.md with real data from the review
+- Generate targeted rules from findings
+- Run `/evolve` to update existing rules
+
+For a comprehensive assessment, run `/deep-review` to produce a full project review.
+"""
+
+
 def cmd_analyze(skill_path):
     return f"""---
 description: Analyze codebase and generate project-specific rules
@@ -563,6 +733,8 @@ Analyze the codebase to detect patterns and generate targeted rules:
 5. Show what was generated
 
 This replaces generic framework rules with project-specific ones based on actual code.
+
+For a comprehensive assessment, run `/deep-review` to produce a full project review.
 """
 
 
@@ -2991,6 +3163,130 @@ def get_architecture_md(args):
     return "\n".join(lines)
 
 
+def get_architecture_md_from_review(args, review_data):
+    """Generate an enhanced ARCHITECTURE.md using real codebase analysis data.
+
+    Starts with the same structure as get_architecture_md(args) but replaces
+    stub sections with real data from the deep analysis.
+    """
+    base = get_architecture_md(args)
+
+    # Replace error handling stub with real data
+    error_patterns = [p for p in review_data.get("patterns", [])
+                      if p.get("category") == "error-handling"]
+    if error_patterns:
+        error_lines = []
+        for p in error_patterns:
+            error_lines.append(p["description"])
+            if p.get("evidence"):
+                for ev in p["evidence"]:
+                    error_lines.append(f"- `{ev}`")
+            if p.get("rule_lines"):
+                for rl in p["rule_lines"]:
+                    error_lines.append(f"- {rl}")
+        error_section = "\n".join(error_lines)
+        base = base.replace(
+            "(Document your error handling strategy: custom error classes, centralized handler, what gets logged vs shown)",
+            error_section
+        )
+
+    # Replace auth flow stub with real data
+    auth_patterns = [p for p in review_data.get("patterns", [])
+                     if p.get("category") == "auth"]
+    if auth_patterns:
+        auth_lines = []
+        for p in auth_patterns:
+            auth_lines.append(p["description"])
+            if p.get("evidence"):
+                for ev in p["evidence"]:
+                    auth_lines.append(f"- `{ev}`")
+            if p.get("rule_lines"):
+                for rl in p["rule_lines"]:
+                    auth_lines.append(f"- {rl}")
+        auth_section = "\n".join(auth_lines)
+        base = base.replace("(Document your auth flow here)", auth_section)
+
+    # Replace data access stub with real data from database patterns
+    db_patterns = [p for p in review_data.get("patterns", [])
+                   if p.get("category") == "database"]
+    if db_patterns:
+        db_lines = []
+        for p in db_patterns:
+            db_lines.append(p["description"])
+            if p.get("evidence"):
+                for ev in p["evidence"]:
+                    db_lines.append(f"- `{ev}`")
+            if p.get("rule_lines"):
+                for rl in p["rule_lines"]:
+                    db_lines.append(f"- {rl}")
+        db_section = "\n".join(db_lines)
+        base = base.replace(
+            "(Document your data access pattern here)",
+            db_section
+        )
+
+    # Add Entry Points section before ADRs
+    entry_points = review_data.get("entry_points", [])
+    if entry_points:
+        ep_lines = ["## Entry Points", ""]
+        for ep in entry_points:
+            ep_type = ep.get("type", "unknown")
+            ep_file = ep.get("file", "")
+            ep_desc = ep.get("description", "")
+            ep_lines.append(f"- **{ep_type}**: `{ep_file}` — {ep_desc}")
+        ep_lines.append("")
+        ep_section = "\n".join(ep_lines)
+        base = base.replace(
+            "## Architecture Decision Records",
+            ep_section + "## Architecture Decision Records"
+        )
+
+    # Add API Surface section before ADRs
+    api_surface = review_data.get("api_surface", {})
+    if api_surface and api_surface.get("total_endpoints", 0) > 0:
+        api_lines = ["## API Surface", ""]
+        api_style = api_surface.get("api_style", "unknown")
+        total = api_surface.get("total_endpoints", 0)
+        api_lines.append(f"**Style**: {api_style} | **Total endpoints**: {total}")
+        api_lines.append("")
+        route_files = api_surface.get("route_files", [])
+        if route_files:
+            api_lines.append("**Route files**:")
+            for rf in route_files:
+                api_lines.append(f"- `{rf}`")
+            api_lines.append("")
+        endpoints = api_surface.get("endpoints", [])
+        if endpoints:
+            api_lines.append("| Method | Path | File |")
+            api_lines.append("|--------|------|------|")
+            for ep in endpoints:
+                api_lines.append(f"| {ep.get('method', '')} | {ep.get('path', '')} | `{ep.get('file', '')}` |")
+            api_lines.append("")
+        api_section = "\n".join(api_lines)
+        base = base.replace(
+            "## Architecture Decision Records",
+            api_section + "## Architecture Decision Records"
+        )
+
+    # Replace env vars stub with real data
+    config_env = review_data.get("config_env", {})
+    env_vars = config_env.get("env_vars_referenced", [])
+    if env_vars:
+        env_lines = []
+        for var in env_vars:
+            name = var.get("name", "")
+            files = var.get("files", [])
+            files_str = ", ".join(f"`{f}`" for f in files) if files else ""
+            env_lines.append(f"- `{name}` — used in {files_str}")
+        env_section = "\n".join(env_lines)
+        base = base.replace(
+            "See `.env.example` for the complete list.",
+            env_section
+        )
+
+    return base
+
+
 # ── Main scaffold logic ─────────────────────────────────────────────────
 
 def safe_write(filepath: Path, content: str, force: bool = False, update: bool = False, dry_run: bool = False) -> str:
@@ -3232,6 +3528,7 @@ def scaffold(args):
         "refactor": cmd_refactor(), "generate-docs": cmd_generate_docs(),
         "debt": cmd_debt(), "decision": cmd_decision(),
         "resume-build": cmd_resume_build(),
+        "deep-review": cmd_deep_review(skill_path),
     }
     if args.tdd:
         commands["tdd"] = cmd_tdd()
@@ -3411,7 +3708,11 @@ def scaffold(args):
         print("  Created CLAUDE.md")
 
     arch_md_path = project_dir / "ARCHITECTURE.md"
-    result = safe_write(arch_md_path, get_architecture_md(args), force, dry_run=dry_run)
+    if hasattr(args, '_deep_analysis') and args._deep_analysis:
+        arch_content = get_architecture_md_from_review(args, args._deep_analysis)
+    else:
+        arch_content = get_architecture_md(args)
+    result = safe_write(arch_md_path, arch_content, force, dry_run=dry_run)
     if result == "skipped":
         print("  Skipped existing ARCHITECTURE.md")
     else:
@@ -3632,6 +3933,7 @@ def main():
     p.add_argument("--preset", choices=list(PRESETS.keys()), default=None, help="Use a preset stack configuration")
     p.add_argument("--upgrade", action="store_true", help="Upgrade existing Launchpad config to current version")
     p.add_argument("--analyze", action="store_true", help="Analyze existing codebase to generate project-specific rules")
+    p.add_argument("--deep", action="store_true", help="Run deep analysis for enhanced ARCHITECTURE.md (use with --analyze)")
     p.add_argument("--monorepo", action="store_true", help="Enable monorepo conventions rule")
     p.add_argument("--migrate-ai-configs", action="store_true", dest="migrate_ai_configs", help="Detect and migrate other AI tool configs (.cursorrules, copilot, etc.)")
     p.add_argument("--event-systems", nargs="*", default=[], help="Event systems (kafka, bullmq, rabbitmq, celery, temporal, nats, aws-events, redis-streams, flink, spark-streaming)")
@@ -3735,6 +4037,22 @@ def main():
                         print(f"  Captured dependency snapshot ({sum(len(v) for v in dep_snapshot.values())} packages)")
                 except ImportError:
                     pass
+                # Capture deep analysis data for enhanced ARCHITECTURE.md
+                if getattr(args, 'deep', False):
+                    args._deep_analysis = {
+                        "entry_points": getattr(analysis, 'entry_points', []),
+                        "api_surface": getattr(analysis, 'api_surface', {}),
+                        "complexity": getattr(analysis, 'complexity', {}),
+                        "test_coverage_map": getattr(analysis, 'test_coverage_map', {}),
+                        "config_env": getattr(analysis, 'config_env', {}),
+                        "patterns": [{"category": p.category, "description": p.description,
+                                       "evidence": p.evidence, "rule_lines": p.rule_lines}
+                                      for p in analysis.patterns],
+                        "key_abstractions": analysis.key_abstractions,
+                        "file_organization": analysis.file_organization,
+                        "stack": analysis.stack,
+                    }
+                    print("  Deep analysis data captured for enhanced ARCHITECTURE.md")
                 print()
             else:
                 print(f"  Skipping analysis — {project_dir} doesn't exist yet")

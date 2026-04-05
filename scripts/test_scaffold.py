@@ -52,6 +52,8 @@ from scaffold import (
     cmd_resume_build,
     cmd_build_teams,
     cmd_setup_teams,
+    cmd_deep_review,
+    get_architecture_md_from_review,
 )
 
 
@@ -99,6 +101,7 @@ def make_args(**overrides):
         "event_patterns": [],
         "schema_format": "none",
         "workflow_orchestration": "none",
+        "deep": False,
     }
     defaults.update(overrides)
     return Namespace(**defaults)
@@ -2415,6 +2418,143 @@ class TestAgentTeams(unittest.TestCase):
             build_path = Path(tmp) / args.project_name / ".claude" / "commands" / "build.md"
             content = build_path.read_text()
             self.assertNotIn("Team roster", content)
+
+
+class TestDeepReview(unittest.TestCase):
+    """Tests for /deep-review command (Priority 2)."""
+
+    def test_deep_review_has_phases(self):
+        content = cmd_deep_review("/fake/path")
+        for phase in range(1, 8):
+            self.assertIn(f"Phase {phase}", content)
+
+    def test_deep_review_uses_analyzer(self):
+        content = cmd_deep_review("/fake/path")
+        self.assertIn("analyze.py", content)
+        self.assertIn("--deep", content)
+
+    def test_deep_review_produces_report(self):
+        content = cmd_deep_review("/fake/path")
+        self.assertIn("docs/project-review.md", content)
+
+    def test_deep_review_has_executive_summary(self):
+        content = cmd_deep_review("/fake/path")
+        self.assertIn("Executive Summary", content)
+        self.assertIn("Health Score", content)
+
+    def test_deep_review_command_registered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = make_args(output_dir=tmp, create_root=True)
+            scaffold(args)
+            cmd_path = Path(tmp) / args.project_name / ".claude" / "commands" / "deep-review.md"
+            self.assertTrue(cmd_path.exists(), "deep-review.md should be created")
+
+    def test_deep_review_interpolates_skill_path(self):
+        skill_path = "/custom/skill/path"
+        content = cmd_deep_review(skill_path)
+        self.assertIn(skill_path, content)
+        self.assertIn(f"{skill_path}/scripts/analyze.py", content)
+
+
+class TestArchitectureMdFromReview(unittest.TestCase):
+    """Tests for enhanced ARCHITECTURE.md generation (Priority 3)."""
+
+    def _make_review_data(self, **overrides):
+        """Create review_data with sensible defaults for testing."""
+        data = {
+            "entry_points": [{"type": "server-start", "file": "src/index.ts", "description": "Express server"}],
+            "api_surface": {
+                "endpoints": [{"method": "GET", "path": "/users", "file": "src/routes/users.ts"}],
+                "route_files": ["src/routes/users.ts"],
+                "api_style": "rest",
+                "total_endpoints": 1,
+            },
+            "complexity": {
+                "large_files": [], "avg_file_lines": 100.0,
+                "total_functions": 50,
+                "files_by_size": {"small": 10, "medium": 5, "large": 1, "very_large": 0},
+            },
+            "test_coverage_map": {
+                "covered": [], "uncovered": [], "test_files": [],
+                "coverage_ratio": 0.0, "untested_dirs": [],
+            },
+            "config_env": {
+                "env_files": [".env.example"],
+                "env_vars_referenced": [{"name": "DATABASE_URL", "files": ["src/db.ts"]}],
+                "config_files": ["src/config.ts"],
+                "has_env_example": True,
+            },
+            "patterns": [
+                {
+                    "category": "error-handling",
+                    "description": "Custom error classes",
+                    "evidence": ["src/lib/errors.ts"],
+                    "rule_lines": ["Use AppError for all errors"],
+                },
+            ],
+            "key_abstractions": [],
+            "file_organization": {},
+            "stack": {"frontend": "nextjs", "backend": "integrated"},
+        }
+        data.update(overrides)
+        return data
+
+    def test_replaces_error_stub(self):
+        args = make_args()
+        review_data = self._make_review_data()
+        content = get_architecture_md_from_review(args, review_data)
+        self.assertIn("Custom error classes", content)
+        self.assertIn("AppError", content)
+        self.assertNotIn("(Document your error handling strategy", content)
+
+    def test_has_entry_points_section(self):
+        args = make_args()
+        review_data = self._make_review_data()
+        content = get_architecture_md_from_review(args, review_data)
+        self.assertIn("## Entry Points", content)
+        self.assertIn("src/index.ts", content)
+        self.assertIn("Express server", content)
+
+    def test_has_api_surface_section(self):
+        args = make_args()
+        review_data = self._make_review_data()
+        content = get_architecture_md_from_review(args, review_data)
+        self.assertIn("## API Surface", content)
+        self.assertIn("rest", content)
+        self.assertIn("src/routes/users.ts", content)
+
+    def test_has_env_vars(self):
+        args = make_args()
+        review_data = self._make_review_data()
+        content = get_architecture_md_from_review(args, review_data)
+        self.assertIn("DATABASE_URL", content)
+        self.assertIn("src/db.ts", content)
+
+    def test_empty_data_graceful(self):
+        args = make_args()
+        empty_data = {
+            "entry_points": [],
+            "api_surface": {},
+            "complexity": {},
+            "test_coverage_map": {},
+            "config_env": {},
+            "patterns": [],
+            "key_abstractions": [],
+            "file_organization": {},
+            "stack": {},
+        }
+        content = get_architecture_md_from_review(args, empty_data)
+        self.assertIsInstance(content, str)
+        self.assertIn("# Architecture", content)
+        # Should still have basic structure
+        self.assertIn("## Key Decisions", content)
+
+    def test_deep_flag_in_argparser(self):
+        """Verify --deep flag is accepted by argparser."""
+        args = make_args(deep=True)
+        self.assertTrue(args.deep)
+        args2 = make_args()
+        self.assertFalse(args2.deep)
 
 
 if __name__ == "__main__":

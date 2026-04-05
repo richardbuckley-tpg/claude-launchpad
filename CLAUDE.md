@@ -50,7 +50,7 @@ scripts/scaffold.py    — Scaffolder (generates .claude/ tree)
 scripts/analyze.py     — Codebase analyzer (extracts patterns → rules)
 scripts/learn.py       — Learning system (captures corrections)
 scripts/audit.py       — Auditor (scores config health)
-scripts/test_*.py      — Test suites (540 tests)
+scripts/test_*.py      — Test suites (588 tests)
 reference/stacks.md    — Stack patterns (Next.js, FastAPI, Go, Rails, Rust, etc.)
 reference/agents.md    — Agent templates and selection logic
 reference/audit-rules.md — Scoring rubric documentation
@@ -63,4 +63,4 @@ Tests use `unittest` with `tempfile` for isolation. Run with:
 python -m pytest scripts/ -v
 ```
 
-Key test areas: stack detection, pattern detection (error handling, auth, validation, data fetching, testing, API, database), file organization, key abstractions, rule generation, capture/forget/git-analysis, feedback loop (incorporate learned, stale rules, reanalysis suggestion, analysis timestamps), command injection blocking, hook scoping, settings merge, dry-run mode, staleness detection, secret detection, agent/rule generation, community MCP, discoverability checks, context percentage, enhanced auto-detection (commands/git/CI/hosting), monorepo detection, AI config migration, dependency drift.
+Key test areas: stack detection, pattern detection (error handling, auth, validation, data fetching, testing, API, database), file organization, key abstractions, rule generation, capture/forget/git-analysis, feedback loop (incorporate learned, stale rules, reanalysis suggestion, analysis timestamps), command injection blocking, hook scoping, settings merge, dry-run mode, staleness detection, secret detection, agent/rule generation, community MCP, discoverability checks, context percentage, enhanced auto-detection (commands/git/CI/hosting), monorepo detection, AI config migration, dependency drift, deep review (entry points, API surface, complexity, test coverage map, config/env, enhanced ARCHITECTURE.md).

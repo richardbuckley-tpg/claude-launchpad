@@ -11,13 +11,18 @@ from analyze import (
     AnalysisResult,
     Pattern,
     analyze,
+    assess_test_coverage_map,
     check_stale_rules,
     collect_source_files,
     detect_ai_configs,
     detect_api_patterns,
+    detect_api_surface,
     detect_auth_patterns,
+    detect_complexity_indicators,
+    detect_config_and_env,
     detect_database_patterns,
     detect_data_fetching,
+    detect_entry_points,
     detect_error_handling,
     detect_file_organization,
     detect_key_abstractions,
@@ -1595,6 +1600,378 @@ class TestEventHandlingPatterns(unittest.TestCase):
         self.assertIn("kafka", CATEGORY_KEYWORDS["event-handling"])
         self.assertIn("consumer", CATEGORY_KEYWORDS["event-handling"])
         self.assertIn("idempoten", CATEGORY_KEYWORDS["event-handling"])
+
+
+class TestDetectEntryPoints(unittest.TestCase):
+    """Test detect_entry_points for various stacks."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        (self.tmpdir / "src").mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_express_listen(self):
+        f = self.tmpdir / "src" / "server.ts"
+        f.write_text("import express from 'express';\nconst app = express();\napp.listen(3000);\n")
+        files = collect_source_files(self.tmpdir)
+        entries = detect_entry_points(self.tmpdir, files, {"language": "typescript"})
+        types = [e["type"] for e in entries]
+        self.assertIn("server-start", types)
+
+    def test_fastapi_entry(self):
+        f = self.tmpdir / "src" / "main.py"
+        f.write_text("from fastapi import FastAPI\napp = FastAPI()\n")
+        files = collect_source_files(self.tmpdir)
+        entries = detect_entry_points(self.tmpdir, files, {"language": "python"})
+        types = [e["type"] for e in entries]
+        self.assertIn("server-start", types)
+
+    def test_django_manage_py(self):
+        f = self.tmpdir / "manage.py"
+        f.write_text("#!/usr/bin/env python\nimport django\n")
+        files = collect_source_files(self.tmpdir)
+        entries = detect_entry_points(self.tmpdir, files, {"language": "python"})
+        types = [e["type"] for e in entries]
+        self.assertIn("cli-entry", types)
+
+    def test_go_cmd_main(self):
+        cmd_dir = self.tmpdir / "cmd" / "server"
+        cmd_dir.mkdir(parents=True)
+        f = cmd_dir / "main.go"
+        f.write_text("package main\n\nfunc main() {\n}\n")
+        files = collect_source_files(self.tmpdir)
+        entries = detect_entry_points(self.tmpdir, files, {"language": "go"})
+        types = [e["type"] for e in entries]
+        self.assertIn("cli-entry", types)
+
+    def test_nextjs_layout(self):
+        app_dir = self.tmpdir / "app"
+        app_dir.mkdir()
+        f = app_dir / "layout.tsx"
+        f.write_text("export default function RootLayout({ children }) {}\n")
+        files = collect_source_files(self.tmpdir)
+        entries = detect_entry_points(self.tmpdir, files, {"language": "typescript", "frontend": "nextjs"})
+        types = [e["type"] for e in entries]
+        self.assertIn("framework-entry", types)
+
+    def test_package_json_main(self):
+        (self.tmpdir / "package.json").write_text(json.dumps({"main": "dist/index.js"}))
+        files = collect_source_files(self.tmpdir)
+        entries = detect_entry_points(self.tmpdir, files, {"language": "typescript"})
+        types = [e["type"] for e in entries]
+        self.assertIn("package-main", types)
+        main_entry = [e for e in entries if e["type"] == "package-main"][0]
+        self.assertEqual(main_entry["file"], "dist/index.js")
+
+    def test_python_dunder_main(self):
+        f = self.tmpdir / "src" / "cli.py"
+        f.write_text("def run():\n    pass\n\nif __name__ == '__main__':\n    run()\n")
+        files = collect_source_files(self.tmpdir)
+        entries = detect_entry_points(self.tmpdir, files, {"language": "python"})
+        types = [e["type"] for e in entries]
+        self.assertIn("script-entry", types)
+
+    def test_no_entry_points(self):
+        files = collect_source_files(self.tmpdir)
+        entries = detect_entry_points(self.tmpdir, files, {"language": "typescript"})
+        self.assertEqual(entries, [])
+
+
+class TestDetectApiSurface(unittest.TestCase):
+    """Test detect_api_surface for various frameworks."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        (self.tmpdir / "src").mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_express_routes(self):
+        f = self.tmpdir / "src" / "routes.ts"
+        f.write_text("router.get('/users', listUsers);\nrouter.post('/users', createUser);\n")
+        files = collect_source_files(self.tmpdir)
+        result = detect_api_surface(self.tmpdir, files, {"language": "typescript"})
+        self.assertTrue(len(result["endpoints"]) >= 2)
+        methods = [ep["method"] for ep in result["endpoints"]]
+        self.assertIn("GET", methods)
+        self.assertIn("POST", methods)
+        paths = [ep["path"] for ep in result["endpoints"]]
+        self.assertIn("/users", paths)
+
+    def test_nextjs_app_router(self):
+        api_dir = self.tmpdir / "app" / "api" / "users"
+        api_dir.mkdir(parents=True)
+        f = api_dir / "route.ts"
+        f.write_text("export async function GET(req: Request) {}\nexport async function POST(req: Request) {}\n")
+        files = collect_source_files(self.tmpdir)
+        result = detect_api_surface(self.tmpdir, files, {"language": "typescript", "frontend": "nextjs"})
+        methods = [ep["method"] for ep in result["endpoints"]]
+        self.assertIn("GET", methods)
+        self.assertIn("POST", methods)
+        paths = [ep["path"] for ep in result["endpoints"]]
+        self.assertIn("/api/users", paths)
+
+    def test_fastapi_decorators(self):
+        f = self.tmpdir / "src" / "main.py"
+        f.write_text('@app.get("/users")\ndef list_users():\n    pass\n\n@app.post("/users")\ndef create_user():\n    pass\n')
+        files = collect_source_files(self.tmpdir)
+        result = detect_api_surface(self.tmpdir, files, {"language": "python"})
+        self.assertTrue(len(result["endpoints"]) >= 2)
+        methods = [ep["method"] for ep in result["endpoints"]]
+        self.assertIn("GET", methods)
+        self.assertIn("POST", methods)
+
+    def test_django_urls(self):
+        f = self.tmpdir / "src" / "urls.py"
+        f.write_text("from django.urls import path\nurlpatterns = [\n    path('users/', views.list_users),\n    path('users/<int:pk>/', views.user_detail),\n]\n")
+        files = collect_source_files(self.tmpdir)
+        result = detect_api_surface(self.tmpdir, files, {"language": "python"})
+        self.assertTrue(len(result["endpoints"]) >= 2)
+        paths = [ep["path"] for ep in result["endpoints"]]
+        self.assertIn("users/", paths)
+
+    def test_go_handle_func(self):
+        f = self.tmpdir / "src" / "main.go"
+        f.write_text('package main\n\nfunc main() {\n    http.HandleFunc("/api/health", healthHandler)\n}\n')
+        files = collect_source_files(self.tmpdir)
+        result = detect_api_surface(self.tmpdir, files, {"language": "go"})
+        self.assertTrue(len(result["endpoints"]) >= 1)
+        paths = [ep["path"] for ep in result["endpoints"]]
+        self.assertIn("/api/health", paths)
+
+    def test_graphql_detection(self):
+        f = self.tmpdir / "src" / "schema.graphql"
+        f.write_text("type Query {\n  users: [User!]!\n}\n")
+        files = collect_source_files(self.tmpdir)
+        # .graphql is not in SOURCE_EXTENSIONS, so we need to add it manually
+        # Actually, let's check — the graphql detection also looks at .ts files with typeDefs
+        f2 = self.tmpdir / "src" / "schema.ts"
+        f2.write_text("const typeDefs = gql`type Query { users: [User] }`;\n")
+        files = collect_source_files(self.tmpdir)
+        result = detect_api_surface(self.tmpdir, files, {"language": "typescript"})
+        self.assertEqual(result["api_style"], "graphql")
+
+    def test_rest_api_style(self):
+        f = self.tmpdir / "src" / "routes.ts"
+        f.write_text("router.get('/users', listUsers);\n")
+        files = collect_source_files(self.tmpdir)
+        result = detect_api_surface(self.tmpdir, files, {"language": "typescript"})
+        self.assertEqual(result["api_style"], "rest")
+
+    def test_endpoint_cap(self):
+        # Create a file with >100 endpoints
+        lines = []
+        for i in range(110):
+            lines.append(f"router.get('/route{i}', handler{i});")
+        f = self.tmpdir / "src" / "routes.ts"
+        f.write_text("\n".join(lines))
+        files = collect_source_files(self.tmpdir)
+        result = detect_api_surface(self.tmpdir, files, {"language": "typescript"})
+        self.assertEqual(len(result["endpoints"]), 100)
+        self.assertEqual(result["total_endpoints"], 110)
+
+
+class TestDetectComplexity(unittest.TestCase):
+    """Test detect_complexity_indicators."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        (self.tmpdir / "src").mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_large_file_detection(self):
+        content = "\n".join([f"const line{i} = {i};" for i in range(400)])
+        f = self.tmpdir / "src" / "big.ts"
+        f.write_text(content)
+        files = collect_source_files(self.tmpdir)
+        result = detect_complexity_indicators(self.tmpdir, files, {"language": "typescript"})
+        large = [lf["file"] for lf in result["large_files"]]
+        self.assertTrue(any("big.ts" in f for f in large))
+
+    def test_function_count_ts(self):
+        content = "\n".join([
+            "function foo() {}",
+            "function bar() {}",
+            "function baz() {}",
+            "function qux() {}",
+            "function quux() {}",
+        ])
+        f = self.tmpdir / "src" / "funcs.ts"
+        f.write_text(content)
+        files = collect_source_files(self.tmpdir)
+        result = detect_complexity_indicators(self.tmpdir, files, {"language": "typescript"})
+        self.assertEqual(result["total_functions"], 5)
+
+    def test_function_count_python(self):
+        content = "def foo():\n    pass\n\ndef bar():\n    pass\n\ndef baz():\n    pass\n"
+        f = self.tmpdir / "src" / "funcs.py"
+        f.write_text(content)
+        files = collect_source_files(self.tmpdir)
+        result = detect_complexity_indicators(self.tmpdir, files, {"language": "python"})
+        self.assertEqual(result["total_functions"], 3)
+
+    def test_size_classification(self):
+        # Small file (<100 lines)
+        (self.tmpdir / "src" / "small.ts").write_text("\n".join([f"// line {i}" for i in range(50)]))
+        # Medium file (100-300 lines)
+        (self.tmpdir / "src" / "medium.ts").write_text("\n".join([f"// line {i}" for i in range(200)]))
+        # Large file (300-600 lines)
+        (self.tmpdir / "src" / "large.ts").write_text("\n".join([f"// line {i}" for i in range(400)]))
+        # Very large file (>600 lines)
+        (self.tmpdir / "src" / "huge.ts").write_text("\n".join([f"// line {i}" for i in range(700)]))
+        files = collect_source_files(self.tmpdir)
+        result = detect_complexity_indicators(self.tmpdir, files, {"language": "typescript"})
+        sizes = result["files_by_size"]
+        self.assertEqual(sizes["small"], 1)
+        self.assertEqual(sizes["medium"], 1)
+        self.assertEqual(sizes["large"], 1)
+        self.assertEqual(sizes["very_large"], 1)
+
+    def test_avg_file_lines(self):
+        (self.tmpdir / "src" / "a.ts").write_text("\n".join([f"// {i}" for i in range(100)]))
+        (self.tmpdir / "src" / "b.ts").write_text("\n".join([f"// {i}" for i in range(200)]))
+        (self.tmpdir / "src" / "c.ts").write_text("\n".join([f"// {i}" for i in range(300)]))
+        files = collect_source_files(self.tmpdir)
+        result = detect_complexity_indicators(self.tmpdir, files, {"language": "typescript"})
+        # Average should be 200
+        self.assertAlmostEqual(result["avg_file_lines"], 200, delta=1)
+
+    def test_empty_project(self):
+        files = collect_source_files(self.tmpdir)
+        result = detect_complexity_indicators(self.tmpdir, files, {"language": "typescript"})
+        self.assertEqual(result["large_files"], [])
+        self.assertEqual(result["total_functions"], 0)
+        self.assertEqual(result["avg_file_lines"], 0.0)
+
+
+class TestAssessTestCoverageMap(unittest.TestCase):
+    """Test assess_test_coverage_map."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        (self.tmpdir / "src").mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_ts_test_found(self):
+        (self.tmpdir / "src" / "foo.ts").write_text("export function foo() {}")
+        (self.tmpdir / "src" / "foo.test.ts").write_text("test('foo', () => {})")
+        files = collect_source_files(self.tmpdir)
+        result = assess_test_coverage_map(self.tmpdir, files, {"language": "typescript"})
+        covered_sources = [c["source"] for c in result["covered"]]
+        self.assertTrue(any("foo.ts" in s for s in covered_sources))
+
+    def test_ts_spec_found(self):
+        (self.tmpdir / "src" / "bar.ts").write_text("export function bar() {}")
+        (self.tmpdir / "src" / "bar.spec.ts").write_text("describe('bar', () => {})")
+        files = collect_source_files(self.tmpdir)
+        result = assess_test_coverage_map(self.tmpdir, files, {"language": "typescript"})
+        covered_sources = [c["source"] for c in result["covered"]]
+        self.assertTrue(any("bar.ts" in s for s in covered_sources))
+
+    def test_python_test_found(self):
+        (self.tmpdir / "src" / "foo.py").write_text("def foo(): pass")
+        (self.tmpdir / "src" / "test_foo.py").write_text("def test_foo(): pass")
+        files = collect_source_files(self.tmpdir)
+        result = assess_test_coverage_map(self.tmpdir, files, {"language": "python"})
+        covered_sources = [c["source"] for c in result["covered"]]
+        self.assertTrue(any("foo.py" in s for s in covered_sources))
+
+    def test_go_test_found(self):
+        (self.tmpdir / "src" / "handler.go").write_text("package main\nfunc Handler() {}")
+        (self.tmpdir / "src" / "handler_test.go").write_text("package main\nfunc TestHandler(t *testing.T) {}")
+        files = collect_source_files(self.tmpdir)
+        result = assess_test_coverage_map(self.tmpdir, files, {"language": "go"})
+        covered_sources = [c["source"] for c in result["covered"]]
+        self.assertTrue(any("handler.go" in s for s in covered_sources))
+
+    def test_uncovered_file(self):
+        (self.tmpdir / "src" / "bar.ts").write_text("export function bar() {}")
+        files = collect_source_files(self.tmpdir)
+        result = assess_test_coverage_map(self.tmpdir, files, {"language": "typescript"})
+        self.assertIn("src/bar.ts", result["uncovered"])
+
+    def test_utility_excluded(self):
+        (self.tmpdir / "src" / "index.ts").write_text("export * from './foo';")
+        files = collect_source_files(self.tmpdir)
+        result = assess_test_coverage_map(self.tmpdir, files, {"language": "typescript"})
+        self.assertNotIn("src/index.ts", result["uncovered"])
+
+    def test_coverage_ratio(self):
+        (self.tmpdir / "src" / "a.ts").write_text("export function a() {}")
+        (self.tmpdir / "src" / "a.test.ts").write_text("test('a', () => {})")
+        (self.tmpdir / "src" / "b.ts").write_text("export function b() {}")
+        # b.ts has no test → uncovered
+        files = collect_source_files(self.tmpdir)
+        result = assess_test_coverage_map(self.tmpdir, files, {"language": "typescript"})
+        # 1 covered, 1 uncovered → ratio = 0.5
+        self.assertAlmostEqual(result["coverage_ratio"], 0.5, places=2)
+
+    def test_untested_dirs(self):
+        untested = self.tmpdir / "src" / "untested"
+        untested.mkdir()
+        (untested / "orphan.ts").write_text("export function orphan() {}")
+        files = collect_source_files(self.tmpdir)
+        result = assess_test_coverage_map(self.tmpdir, files, {"language": "typescript"})
+        self.assertTrue(any("untested" in d for d in result["untested_dirs"]))
+
+
+class TestDetectConfigEnv(unittest.TestCase):
+    """Test detect_config_and_env."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        (self.tmpdir / "src").mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_env_example_detection(self):
+        (self.tmpdir / ".env.example").write_text("DATABASE_URL=\nSECRET_KEY=\n")
+        files = collect_source_files(self.tmpdir)
+        result = detect_config_and_env(self.tmpdir, files, {"language": "typescript"})
+        self.assertTrue(result["has_env_example"])
+
+    def test_env_var_refs_ts(self):
+        f = self.tmpdir / "src" / "config.ts"
+        f.write_text("const dbUrl = process.env.DATABASE_URL;\n")
+        files = collect_source_files(self.tmpdir)
+        result = detect_config_and_env(self.tmpdir, files, {"language": "typescript"})
+        var_names = [v["name"] for v in result["env_vars_referenced"]]
+        self.assertIn("DATABASE_URL", var_names)
+
+    def test_env_var_refs_python(self):
+        f = self.tmpdir / "src" / "settings.py"
+        f.write_text('import os\nsecret = os.getenv("SECRET_KEY")\n')
+        files = collect_source_files(self.tmpdir)
+        result = detect_config_and_env(self.tmpdir, files, {"language": "python"})
+        var_names = [v["name"] for v in result["env_vars_referenced"]]
+        self.assertIn("SECRET_KEY", var_names)
+
+    def test_config_file_detection(self):
+        (self.tmpdir / "src" / "config.ts").write_text("export const config = {};")
+        files = collect_source_files(self.tmpdir)
+        result = detect_config_and_env(self.tmpdir, files, {"language": "typescript"})
+        self.assertTrue(any("config.ts" in f for f in result["config_files"]))
+
+    def test_no_env_files(self):
+        files = collect_source_files(self.tmpdir)
+        result = detect_config_and_env(self.tmpdir, files, {"language": "typescript"})
+        self.assertEqual(result["env_files"], [])
+        self.assertFalse(result["has_env_example"])
+
+    def test_env_example_not_env(self):
+        (self.tmpdir / ".env").write_text("SECRET=real_secret\n")
+        files = collect_source_files(self.tmpdir)
+        result = detect_config_and_env(self.tmpdir, files, {"language": "typescript"})
+        self.assertFalse(result["has_env_example"])
+        self.assertIn(".env", result["env_files"])
 
 
 if __name__ == "__main__":

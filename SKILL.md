@@ -28,6 +28,7 @@ no cargo-cult config. Everything contains real values from the interview.
 
 - **Greenfield** — New project from scratch (full interview → generation)
 - **Existing project** — Analyze codebase → auto-detect stack → fill gaps → project-specific rules
+- **Deep Review** — For existing projects: comprehensive multi-phase assessment → project review report → enhanced ARCHITECTURE.md
 - **Audit only** — Score and improve an existing .claude/ configuration
 - **Learn** — Record corrections, analyze git history for mistake patterns
 
@@ -55,6 +56,10 @@ Ask conversationally, 2-3 questions at a time. Don't dump all at once.
 > (error handling, validation, auth middleware, file organization, key abstractions).
 > It also detects and migrates other AI configs (.cursorrules, copilot-instructions.md, .windsurfrules).
 > Present findings, only ask about gaps the analyzer can't detect (preferences, team size).
+>
+> **Deep review**: After scaffolding, suggest running `/deep-review` for a comprehensive assessment.
+> With `--analyze --deep`, the analyzer also detects entry points, API surface, complexity indicators,
+> test coverage map, and config/env — producing an enhanced ARCHITECTURE.md with real data instead of stubs.
 
 Capture: `project_name`, `description`, `team`, `architecture`, `is_existing`
 
@@ -183,7 +188,7 @@ python <skill-path>/scripts/scaffold.py \
   [--lint-cmd "{lint_cmd}"] [--test-cmd "{test_cmd}"] \
   [--dev-cmd "{dev_cmd}"] [--build-cmd "{build_cmd}"] \
   [--migrate-cmd "{migrate_cmd}"] [--analyze] [--monorepo] \
-  [--migrate-ai-configs] [--create-root]
+  [--migrate-ai-configs] [--deep] [--create-root]
 ```
 
 This creates: directory structure, .claude/ skeleton, slash commands, skills, agents, rules, hooks,

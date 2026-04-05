@@ -42,6 +42,11 @@ class AnalysisResult:
     patterns: list                 # Pattern objects
     key_abstractions: list         # {name, file, type, description}
     file_organization: dict        # {style, test_location, etc.}
+    entry_points: list = field(default_factory=list)
+    api_surface: dict = field(default_factory=dict)
+    complexity: dict = field(default_factory=dict)
+    test_coverage_map: dict = field(default_factory=dict)
+    config_env: dict = field(default_factory=dict)
 
 
 # ── Constants ────────────────────────────────────────────────────────────
@@ -1413,6 +1418,513 @@ def detect_event_handling_patterns(project_dir: Path, files: list, stack: dict) 
     return patterns
 
 
+# ── Deep Analysis Detectors ──────────────────────────────────────────────
+
+
+def detect_entry_points(project_dir: Path, files: list, stack: dict) -> list:
+    """Detect application entry points (main files, server starts, CLI entries)."""
+    entries = []
+    lang = stack.get("language", "")
+
+    # Check package.json for main/bin fields (Node/TS/JS)
+    pkg_json = project_dir / "package.json"
+    if pkg_json.exists():
+        try:
+            pkg = json.loads(pkg_json.read_text())
+            main_field = pkg.get("main")
+            if main_field:
+                entries.append({
+                    "type": "package-main",
+                    "file": main_field,
+                    "description": f"package.json main: {main_field}",
+                })
+            bin_field = pkg.get("bin")
+            if isinstance(bin_field, str):
+                entries.append({
+                    "type": "cli-entry",
+                    "file": bin_field,
+                    "description": f"package.json bin: {bin_field}",
+                })
+            elif isinstance(bin_field, dict):
+                for name, path in bin_field.items():
+                    entries.append({
+                        "type": "cli-entry",
+                        "file": path,
+                        "description": f"package.json bin '{name}': {path}",
+                    })
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass
+
+    for fp in files:
+        content = read_file_safe(fp)
+        rel = str(fp.relative_to(project_dir))
+
+        # TS/JS: app.listen / server.listen
+        if lang in ("typescript", "javascript") or fp.suffix in (".ts", ".tsx", ".js", ".jsx"):
+            if re.search(r'(?:app|server)\.listen\s*\(', content):
+                entries.append({
+                    "type": "server-start",
+                    "file": rel,
+                    "description": "Server listen call",
+                })
+
+        # Python: FastAPI app, manage.py, __main__
+        if lang == "python" or fp.suffix == ".py":
+            if re.search(r'app\s*=\s*FastAPI\s*\(', content):
+                entries.append({
+                    "type": "server-start",
+                    "file": rel,
+                    "description": "FastAPI application instance",
+                })
+            if fp.name == "manage.py":
+                entries.append({
+                    "type": "cli-entry",
+                    "file": rel,
+                    "description": "Django manage.py",
+                })
+            if re.search(r'if\s+__name__\s*==\s*[\'"]__main__[\'"]\s*:', content):
+                entries.append({
+                    "type": "script-entry",
+                    "file": rel,
+                    "description": "Python __main__ guard",
+                })
+
+        # Go: func main() and cmd/*/main.go
+        if lang == "go" or fp.suffix == ".go":
+            if re.search(r'\bfunc\s+main\s*\(\s*\)', content):
+                entries.append({
+                    "type": "cli-entry" if "cmd/" in rel else "server-start",
+                    "file": rel,
+                    "description": "Go main function",
+                })
+
+        # Rust: src/main.rs
+        if lang == "rust" or fp.suffix == ".rs":
+            if fp.name == "main.rs":
+                entries.append({
+                    "type": "cli-entry",
+                    "file": rel,
+                    "description": "Rust main entry point",
+                })
+
+        # Ruby: config.ru, routes.rb
+        if lang == "ruby" or fp.suffix == ".rb":
+            if fp.name == "config.ru":
+                entries.append({
+                    "type": "server-start",
+                    "file": rel,
+                    "description": "Rack config (config.ru)",
+                })
+            if rel == "config/routes.rb":
+                entries.append({
+                    "type": "router",
+                    "file": rel,
+                    "description": "Rails routes",
+                })
+
+    # Next.js specific: app/layout.tsx, middleware.ts
+    for special in ["app/layout.tsx", "app/layout.ts", "app/layout.jsx", "app/layout.js",
+                     "middleware.ts", "middleware.js"]:
+        if (project_dir / special).exists():
+            desc = "Next.js root layout" if "layout" in special else "Next.js middleware"
+            entries.append({
+                "type": "framework-entry",
+                "file": special,
+                "description": desc,
+            })
+
+    # Deduplicate by file
+    seen = set()
+    unique = []
+    for e in entries:
+        if e["file"] not in seen:
+            seen.add(e["file"])
+            unique.append(e)
+
+    return unique[:20]
+
+
+def detect_api_surface(project_dir: Path, files: list, stack: dict) -> dict:
+    """Detect API endpoints and routing patterns."""
+    endpoints = []
+    route_files = set()
+    api_style = "rest"
+    has_graphql = False
+    has_trpc = False
+    lang = stack.get("language", "")
+
+    for fp in files:
+        content = read_file_safe(fp)
+        rel = str(fp.relative_to(project_dir))
+
+        # Express/Fastify: app.get('/path') or router.post('/path')
+        if lang in ("typescript", "javascript") or fp.suffix in (".ts", ".tsx", ".js", ".jsx"):
+            express_re = re.compile(
+                r'(?:app|router)\.(get|post|put|patch|delete)\s*\(\s*[\'"]([^\'"]+)',
+                re.IGNORECASE,
+            )
+            for match in express_re.finditer(content):
+                method = match.group(1).upper()
+                path = match.group(2)
+                endpoints.append({"method": method, "path": path, "file": rel})
+                route_files.add(rel)
+
+            # tRPC detection
+            if "createTRPCRouter" in content:
+                has_trpc = True
+                route_files.add(rel)
+
+            # GraphQL schema/typeDefs
+            if re.search(r'(?:typeDefs|@Query|@Mutation|gql`)', content):
+                has_graphql = True
+                route_files.add(rel)
+
+        # Next.js App Router: app/api/**/route.{ts,js}
+        if re.match(r'app/api/.+/route\.[jt]sx?$', rel):
+            route_files.add(rel)
+            # Derive path from file path: app/api/users/route.ts → /api/users
+            url_path = "/" + "/".join(rel.split("/")[1:-1])  # strip "app" prefix and "route.ts"
+            for method_name in ("GET", "POST", "PUT", "DELETE", "PATCH"):
+                if re.search(rf'export\s+(?:async\s+)?function\s+{method_name}\b', content):
+                    endpoints.append({"method": method_name, "path": url_path, "file": rel})
+
+        # FastAPI: @app.get("/path") or @router.post("/path")
+        if lang == "python" or fp.suffix == ".py":
+            fastapi_re = re.compile(
+                r'@(?:app|router)\.(get|post|put|patch|delete)\s*\(\s*[\'"]([^\'"]+)',
+                re.IGNORECASE,
+            )
+            for match in fastapi_re.finditer(content):
+                method = match.group(1).upper()
+                path = match.group(2)
+                endpoints.append({"method": method, "path": path, "file": rel})
+                route_files.add(rel)
+
+            # Django: path('users/', ...) in urls.py
+            if fp.name == "urls.py":
+                django_re = re.compile(r'path\(\s*[\'"]([^\'"]+)')
+                for match in django_re.finditer(content):
+                    path = match.group(1)
+                    endpoints.append({"method": "ANY", "path": path, "file": rel})
+                    route_files.add(rel)
+
+        # Go: http.HandleFunc and chi/gin/echo
+        if lang == "go" or fp.suffix == ".go":
+            handle_re = re.compile(r'HandleFunc\(\s*[\'"]([^\'"]+)')
+            for match in handle_re.finditer(content):
+                endpoints.append({"method": "ANY", "path": match.group(1), "file": rel})
+                route_files.add(rel)
+
+            go_router_re = re.compile(
+                r'r\.(Get|Post|Put|Delete)\(\s*[\'"]([^\'"]+)',
+                re.IGNORECASE,
+            )
+            for match in go_router_re.finditer(content):
+                method = match.group(1).upper()
+                path = match.group(2)
+                endpoints.append({"method": method, "path": path, "file": rel})
+                route_files.add(rel)
+
+        # Rails: routes.rb
+        if (lang == "ruby" or fp.suffix == ".rb") and "routes" in fp.name:
+            rails_route_re = re.compile(
+                r'(get|post|put|patch|delete)\s+[\'"]([^\'"]+)',
+                re.IGNORECASE,
+            )
+            for match in rails_route_re.finditer(content):
+                method = match.group(1).upper()
+                path = match.group(2)
+                endpoints.append({"method": method, "path": path, "file": rel})
+                route_files.add(rel)
+
+            resources_re = re.compile(r'resources\s+:(\w+)')
+            for match in resources_re.finditer(content):
+                resource = match.group(1)
+                endpoints.append({"method": "RESOURCE", "path": f"/{resource}", "file": rel})
+                route_files.add(rel)
+
+    # GraphQL file detection
+    for fp in files:
+        if fp.suffix in (".graphql", ".gql"):
+            has_graphql = True
+            route_files.add(str(fp.relative_to(project_dir)))
+
+    # Determine api_style
+    has_rest = len(endpoints) > 0
+    if has_graphql and has_trpc:
+        api_style = "mixed"
+    elif has_graphql and has_rest:
+        api_style = "mixed"
+    elif has_trpc and has_rest:
+        api_style = "mixed"
+    elif has_graphql:
+        api_style = "graphql"
+    elif has_trpc:
+        api_style = "trpc"
+    elif has_rest:
+        api_style = "rest"
+    else:
+        api_style = "none"
+
+    # Cap endpoints
+    total = len(endpoints)
+    endpoints = endpoints[:100]
+
+    return {
+        "endpoints": endpoints,
+        "route_files": sorted(route_files),
+        "api_style": api_style,
+        "total_endpoints": total,
+    }
+
+
+def detect_complexity_indicators(project_dir: Path, files: list, stack: dict) -> dict:
+    """Detect code complexity indicators: large files, function counts, size distribution."""
+    func_re = re.compile(
+        r'(?:function\s+\w+|def\s+\w+|func\s+\w+|fn\s+\w+|(?:const|let|var)\s+\w+\s*=\s*(?:async\s+)?\()'
+    )
+
+    file_stats = []
+    total_functions = 0
+
+    for fp in files:
+        content = read_file_safe(fp)
+        if not content:
+            continue
+        rel = str(fp.relative_to(project_dir))
+        lines = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
+        funcs = len(func_re.findall(content))
+        total_functions += funcs
+        file_stats.append({"file": rel, "lines": lines, "functions": funcs})
+
+    # Size classification
+    small = sum(1 for s in file_stats if s["lines"] < 100)
+    medium = sum(1 for s in file_stats if 100 <= s["lines"] <= 300)
+    large = sum(1 for s in file_stats if 300 < s["lines"] <= 600)
+    very_large = sum(1 for s in file_stats if s["lines"] > 600)
+
+    # Large files (>300 lines), sorted by line count desc
+    large_files = sorted(
+        [s for s in file_stats if s["lines"] > 300],
+        key=lambda s: s["lines"],
+        reverse=True,
+    )[:20]
+
+    # Average file lines
+    total_lines = sum(s["lines"] for s in file_stats)
+    avg = total_lines / max(1, len(file_stats))
+
+    return {
+        "large_files": large_files,
+        "avg_file_lines": round(avg, 1),
+        "total_functions": total_functions,
+        "files_by_size": {
+            "small": small,
+            "medium": medium,
+            "large": large,
+            "very_large": very_large,
+        },
+    }
+
+
+def assess_test_coverage_map(project_dir: Path, files: list, stack: dict) -> dict:
+    """Assess which source files have corresponding test files."""
+    test_re = re.compile(r'\.(?:test|spec)\.[jt]sx?$|^test_|_test\.go$|_test\.py$|_test\.rs$')
+    utility_names = {
+        "index.ts", "index.js", "index.tsx", "index.jsx",
+        "types.ts", "types.js", "constants.ts", "constants.js",
+        "config.ts", "config.js",
+        "__init__.py", "conftest.py", "setup.py",
+    }
+
+    test_files = []
+    source_files = []
+    for fp in files:
+        if test_re.search(fp.name):
+            test_files.append(fp)
+        else:
+            source_files.append(fp)
+
+    # Filter out __pycache__ files
+    source_files = [fp for fp in source_files if "__pycache__" not in str(fp)]
+
+    # Build set of test basenames for quick lookup
+    test_basenames = {}
+    for tf in test_files:
+        rel = str(tf.relative_to(project_dir))
+        test_basenames[tf.name] = rel
+        # Also index by parent dir for __tests__ lookups
+        test_basenames[(str(tf.parent), tf.name)] = rel
+
+    covered = []
+    uncovered = []
+
+    for fp in source_files:
+        rel = str(fp.relative_to(project_dir))
+        stem = fp.stem
+        suffix = fp.suffix
+        parent = fp.parent
+
+        # Skip utility files from "uncovered"
+        is_utility = fp.name in utility_names
+
+        found_test = False
+
+        if suffix in (".ts", ".tsx", ".js", ".jsx"):
+            # foo.ts → foo.test.ts, foo.spec.ts
+            base = stem.replace(".d", "")  # handle .d.ts
+            for test_suffix in [".test", ".spec"]:
+                for ext in [".ts", ".tsx", ".js", ".jsx"]:
+                    candidate = f"{base}{test_suffix}{ext}"
+                    # Same dir
+                    if candidate in test_basenames:
+                        found_test = True
+                        covered.append({"source": rel, "test": test_basenames[candidate]})
+                        break
+                    # __tests__ subdir
+                    tests_key = (str(parent / "__tests__"), candidate)
+                    if tests_key in test_basenames:
+                        found_test = True
+                        covered.append({"source": rel, "test": test_basenames[tests_key]})
+                        break
+                if found_test:
+                    break
+
+        elif suffix == ".py":
+            # foo.py → test_foo.py
+            candidate = f"test_{fp.name}"
+            if candidate in test_basenames:
+                found_test = True
+                covered.append({"source": rel, "test": test_basenames[candidate]})
+            else:
+                # Check tests/ dir
+                tests_key = (str(project_dir / "tests"), candidate)
+                if tests_key in test_basenames:
+                    found_test = True
+                    covered.append({"source": rel, "test": test_basenames[tests_key]})
+
+        elif suffix == ".go":
+            # foo.go → foo_test.go
+            candidate = f"{stem}_test.go"
+            if candidate in test_basenames:
+                found_test = True
+                covered.append({"source": rel, "test": test_basenames[candidate]})
+
+        elif suffix == ".rs":
+            # foo.rs → foo_test.rs
+            candidate = f"{stem}_test.rs"
+            if candidate in test_basenames:
+                found_test = True
+                covered.append({"source": rel, "test": test_basenames[candidate]})
+
+        if not found_test and not is_utility:
+            uncovered.append(rel)
+
+    # Coverage ratio
+    coverage_ratio = len(covered) / max(1, len(covered) + len(uncovered))
+
+    # Untested dirs: directories with source files but zero coverage
+    dir_has_source = {}
+    dir_has_coverage = set()
+    for fp in source_files:
+        if fp.name not in utility_names:
+            d = str(fp.parent.relative_to(project_dir))
+            dir_has_source[d] = True
+    for c in covered:
+        d = str(Path(c["source"]).parent)
+        dir_has_coverage.add(d)
+    untested_dirs = sorted([d for d in dir_has_source if d not in dir_has_coverage])
+
+    return {
+        "covered": covered,
+        "uncovered": uncovered,
+        "test_files": [str(tf.relative_to(project_dir)) for tf in test_files],
+        "coverage_ratio": round(coverage_ratio, 2),
+        "untested_dirs": untested_dirs,
+    }
+
+
+def detect_config_and_env(project_dir: Path, files: list, stack: dict) -> dict:
+    """Detect environment files, env var references, and config files."""
+    lang = stack.get("language", "")
+
+    # Scan for .env* files in project root
+    env_files = []
+    for item in sorted(project_dir.iterdir()):
+        if item.is_file() and item.name.startswith(".env"):
+            env_files.append(item.name)
+
+    # Check for .env.example
+    has_env_example = (project_dir / ".env.example").exists()
+
+    # Read .env.example for variable names (safe to read)
+    example_vars = set()
+    if has_env_example:
+        try:
+            content = (project_dir / ".env.example").read_text(errors="replace")
+            for line in content.splitlines():
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    match = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)\s*=', line)
+                    if match:
+                        example_vars.add(match.group(1))
+        except OSError:
+            pass
+
+    # Scan source files for env var references
+    env_var_refs = {}  # name -> set of files
+
+    ts_env_re = re.compile(r'process\.env\.(\w+)')
+    ts_meta_re = re.compile(r'import\.meta\.env\.(\w+)')
+    py_environ_re = re.compile(r'os\.environ\[[\'"](\w+)[\'"]\]')
+    py_getenv_re = re.compile(r'os\.getenv\([\'"](\w+)[\'"]\)')
+    go_getenv_re = re.compile(r'os\.Getenv\([\'"](\w+)[\'"]\)')
+    rust_env_re = re.compile(r'env::var\([\'"](\w+)[\'"]\)')
+
+    config_files = []
+
+    for fp in files:
+        content = read_file_safe(fp)
+        if not content:
+            continue
+        rel = str(fp.relative_to(project_dir))
+
+        # Detect config files
+        if re.match(r'(?:.*[/\\])?config\.[jt]sx?$|(?:.*[/\\])?config\.py$|(?:.*[/\\])?config\.go$|(?:.*[/\\])?config\.rs$|(?:.*[/\\])?settings\.py$', rel):
+            config_files.append(rel)
+        elif re.match(r'.*\.config\.[jt]sx?$', rel):
+            config_files.append(rel)
+
+        # Env var patterns
+        regexes = []
+        if fp.suffix in (".ts", ".tsx", ".js", ".jsx"):
+            regexes = [ts_env_re, ts_meta_re]
+        elif fp.suffix == ".py":
+            regexes = [py_environ_re, py_getenv_re]
+        elif fp.suffix == ".go":
+            regexes = [go_getenv_re]
+        elif fp.suffix == ".rs":
+            regexes = [rust_env_re]
+
+        for regex in regexes:
+            for match in regex.finditer(content):
+                var_name = match.group(1)
+                env_var_refs.setdefault(var_name, set()).add(rel)
+
+    # Format env var references
+    env_vars_referenced = [
+        {"name": name, "files": sorted(ref_files)}
+        for name, ref_files in sorted(env_var_refs.items())
+    ]
+
+    return {
+        "env_files": env_files,
+        "env_vars_referenced": env_vars_referenced,
+        "config_files": sorted(config_files),
+        "has_env_example": has_env_example,
+    }
+
+
 # ── File Organization ────────────────────────────────────────────────────
 
 def detect_file_organization(project_dir: Path, files: list, stack: dict) -> dict:
@@ -1535,8 +2047,8 @@ def detect_key_abstractions(project_dir: Path, files: list, stack: dict) -> list
 
 # ── Main Analysis ────────────────────────────────────────────────────────
 
-def analyze(project_dir: Path) -> AnalysisResult:
-    """Run full codebase analysis."""
+def analyze(project_dir: Path, deep: bool = False) -> AnalysisResult:
+    """Run full codebase analysis. When deep=True, includes entry points, API surface, complexity, test coverage, and config/env."""
     stack = detect_stack(project_dir)
     files = collect_source_files(project_dir)
 
@@ -1553,13 +2065,22 @@ def analyze(project_dir: Path) -> AnalysisResult:
     # Filter by confidence
     confident = [p for p in all_patterns if p.confidence >= 0.5]
 
-    return AnalysisResult(
+    result = AnalysisResult(
         project_dir=str(project_dir),
         stack=stack,
         patterns=confident,
         key_abstractions=detect_key_abstractions(project_dir, files, stack),
         file_organization=detect_file_organization(project_dir, files, stack),
     )
+
+    if deep:
+        result.entry_points = detect_entry_points(project_dir, files, stack)
+        result.api_surface = detect_api_surface(project_dir, files, stack)
+        result.complexity = detect_complexity_indicators(project_dir, files, stack)
+        result.test_coverage_map = assess_test_coverage_map(project_dir, files, stack)
+        result.config_env = detect_config_and_env(project_dir, files, stack)
+
+    return result
 
 
 # ── Rule Generation ──────────────────────────────────────────────────────
@@ -1840,6 +2361,56 @@ def format_report(result: AnalysisResult) -> str:
             if len(items) > 5:
                 lines.append(f"    ... and {len(items) - 5} more")
 
+    # Deep analysis sections
+    if result.entry_points:
+        lines.append(f"\nEntry Points ({len(result.entry_points)}):")
+        for ep in result.entry_points:
+            lines.append(f"  [{ep['type']}] {ep['file']}: {ep['description']}")
+
+    if result.api_surface:
+        surface = result.api_surface
+        lines.append(f"\nAPI Surface (style: {surface.get('api_style', 'unknown')}, {surface.get('total_endpoints', 0)} endpoints):")
+        for ep in surface.get("endpoints", [])[:20]:
+            lines.append(f"  {ep['method']} {ep['path']}  ({ep['file']})")
+        if surface.get("total_endpoints", 0) > 20:
+            lines.append(f"  ... and {surface['total_endpoints'] - 20} more")
+        if surface.get("route_files"):
+            lines.append(f"  Route files: {', '.join(surface['route_files'][:5])}")
+
+    if result.complexity:
+        cx = result.complexity
+        lines.append(f"\nComplexity Indicators:")
+        lines.append(f"  Average file size: {cx.get('avg_file_lines', 0)} lines")
+        lines.append(f"  Total functions: {cx.get('total_functions', 0)}")
+        sizes = cx.get("files_by_size", {})
+        lines.append(f"  Size distribution: {sizes.get('small', 0)} small, {sizes.get('medium', 0)} medium, {sizes.get('large', 0)} large, {sizes.get('very_large', 0)} very large")
+        if cx.get("large_files"):
+            lines.append(f"  Large files:")
+            for lf in cx["large_files"][:10]:
+                lines.append(f"    {lf['file']}: {lf['lines']} lines, {lf['functions']} functions")
+
+    if result.test_coverage_map:
+        tcm = result.test_coverage_map
+        lines.append(f"\nTest Coverage Map:")
+        lines.append(f"  Coverage ratio: {tcm.get('coverage_ratio', 0):.0%}")
+        lines.append(f"  Covered: {len(tcm.get('covered', []))} files")
+        lines.append(f"  Uncovered: {len(tcm.get('uncovered', []))} files")
+        if tcm.get("untested_dirs"):
+            lines.append(f"  Untested directories: {', '.join(tcm['untested_dirs'][:5])}")
+
+    if result.config_env:
+        ce = result.config_env
+        lines.append(f"\nConfig & Environment:")
+        if ce.get("env_files"):
+            lines.append(f"  Env files: {', '.join(ce['env_files'])}")
+        lines.append(f"  Has .env.example: {'yes' if ce.get('has_env_example') else 'no'}")
+        if ce.get("env_vars_referenced"):
+            lines.append(f"  Env vars referenced ({len(ce['env_vars_referenced'])}):")
+            for var in ce["env_vars_referenced"][:10]:
+                lines.append(f"    {var['name']} (in {', '.join(var['files'][:3])})")
+        if ce.get("config_files"):
+            lines.append(f"  Config files: {', '.join(ce['config_files'][:5])}")
+
     gen_rules = generate_rules_from_analysis(result)
     lines.append(f"\nWould generate {len(gen_rules)} rule files:")
     for name, _ in gen_rules:
@@ -1884,6 +2455,8 @@ def main():
                    help="Check for stale project-*.md rules")
     p.add_argument("--migrate-ai-configs", action="store_true", dest="migrate_ai_configs",
                    help="Detect and migrate other AI tool configs (.cursorrules, copilot, etc.)")
+    p.add_argument("--deep", action="store_true",
+                   help="Include deep analysis: entry points, API surface, complexity, test coverage, config/env")
     args = p.parse_args()
 
     project_dir = Path(args.project_dir).resolve()
@@ -1919,7 +2492,7 @@ def main():
             print("No AI tool configs found")
         sys.exit(0)
 
-    result = analyze(project_dir)
+    result = analyze(project_dir, deep=args.deep)
 
     if args.incorporate_learned:
         result = incorporate_learned(result, project_dir)
@@ -1942,6 +2515,16 @@ def main():
             "key_abstractions": result.key_abstractions,
             "file_organization": result.file_organization,
         }
+        if result.entry_points:
+            output["entry_points"] = result.entry_points
+        if result.api_surface:
+            output["api_surface"] = result.api_surface
+        if result.complexity:
+            output["complexity"] = result.complexity
+        if result.test_coverage_map:
+            output["test_coverage_map"] = result.test_coverage_map
+        if result.config_env:
+            output["config_env"] = result.config_env
         print(json.dumps(output, indent=2))
     elif args.write_rules:
         created = write_rules(project_dir, result, force=args.force)
