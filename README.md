@@ -56,8 +56,8 @@ Launchpad generates a complete Claude Code configuration tailored to your projec
 
 | What | Count | Purpose |
 |------|-------|---------|
-| **Agents** | 8-13 | Specialized AI teammates — architect, tester, reviewer, security auditor, and more |
-| **Slash Commands** | 9-11 | `/build`, `/learn`, `/evolve`, `/audit`, `/idea-to-prd`, and more |
+| **Agents** | 10-15 | Specialized AI teammates — architect, tester, reviewer, refactorer, docs-generator, and more |
+| **Slash Commands** | 14-18 | `/build`, `/learn`, `/evolve`, `/audit`, `/debt`, `/decision`, `/refactor`, and more |
 | **Rules** | 2-5 | Path-scoped conventions (e.g., Next.js rules only apply to `src/app/**/*.tsx`) |
 | **Skills** | 8-13 | Code generation templates for your specific stack + domain knowledge |
 | **Hooks** | 4-6 | Auto-lint on save, auto-test (TDD), force-push block, secret detection |
@@ -80,6 +80,8 @@ Launchpad generates a complete Claude Code configuration tailored to your projec
 | `@idea-to-prd` | Researches an idea online → generates structured PRD with competitive analysis. |
 | `@pre-push` | Pre-flight checklist: lint, test, build, type-check, secrets scan, debug code scan. |
 | `@dev-ops` | Proposes infrastructure (local/staging/prod) with cost estimates + starter IaC. |
+| `@refactorer` | Systematic refactoring with test safety — baseline → refactor → verify. |
+| `@docs-generator` | Generates API docs, component docs, README sections from code. |
 
 **Conditional (added when relevant):**
 
@@ -104,7 +106,13 @@ Launchpad generates a complete Claude Code configuration tailored to your projec
 | `/audit` | Check config health, token cost, staleness |
 | `/analyze` | Detect code patterns, generate project-specific rules |
 | `/project-status` | Where am I? Recent changes, test health, next action |
-| `/handoff` | Save session context for next time |
+| `/handoff` | Auto-capture session state — git changes, test health, metrics |
+| `/refactor <target>` | Systematic refactoring with test safety guarantees |
+| `/generate-docs <scope>` | Generate documentation from source code |
+| `/debt` | Scan for TODO/FIXME/HACK, track debt trends over time |
+| `/decision <title>` | Record an architecture decision (ADR) in `docs/decisions/` |
+| `/resume-build` | Resume an interrupted `/build` pipeline from last completed stage |
+| `/cloud-fix` | Fix CI failures or review comments on current PR |
 | `/tdd <feature>` | Red-green-refactor cycle (when `--tdd` is set) |
 
 ---

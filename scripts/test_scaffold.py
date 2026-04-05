@@ -44,6 +44,12 @@ from scaffold import (
     scaffold,
     cmd_build,
     cmd_cloud_fix,
+    cmd_handoff,
+    cmd_refactor,
+    cmd_generate_docs,
+    cmd_debt,
+    cmd_decision,
+    cmd_resume_build,
 )
 
 
@@ -2086,6 +2092,250 @@ class TestLSPRecommendations(unittest.TestCase):
         self.assertIn("typescript-language-server", servers)
         # Should not duplicate
         self.assertEqual(servers.count("typescript-language-server"), 1)
+
+
+class TestSmartHandoff(unittest.TestCase):
+    """Tests for smart handoff with auto-capture."""
+
+    def test_handoff_command_has_git_log(self):
+        content = cmd_handoff()
+        self.assertIn("git log", content)
+
+    def test_handoff_command_has_git_diff(self):
+        content = cmd_handoff()
+        self.assertIn("git diff", content)
+
+    def test_handoff_command_has_todo_scan(self):
+        content = cmd_handoff()
+        self.assertIn("TODO", content)
+
+    def test_handoff_command_has_session_metrics(self):
+        content = cmd_handoff()
+        self.assertIn("Session Metrics", content)
+
+    def test_handoff_command_has_architecture_decisions(self):
+        content = cmd_handoff()
+        self.assertIn("Architecture Decisions", content)
+
+    def test_handoff_command_has_debt_items(self):
+        content = cmd_handoff()
+        self.assertIn("Debt Items", content)
+
+    def test_handoff_template_has_architecture_decisions_table(self):
+        template = get_handoff("test-app")
+        self.assertIn("Architecture Decisions", template)
+        self.assertIn("Decision", template)
+        self.assertIn("Rationale", template)
+
+    def test_handoff_template_has_debt_section(self):
+        template = get_handoff("test-app")
+        self.assertIn("Debt Items", template)
+
+    def test_handoff_template_has_session_metrics(self):
+        template = get_handoff("test-app")
+        self.assertIn("Session Metrics", template)
+        self.assertIn("Files changed", template)
+
+    def test_stop_hook_checks_recent_commits(self):
+        args = make_args()
+        hooks = get_hooks(args)
+        stop_cmd = hooks["Stop"][0]["hooks"][0]["command"]
+        self.assertIn("git log", stop_cmd)
+        self.assertIn("since", stop_cmd)
+
+
+class TestRefactorerAgent(unittest.TestCase):
+    """Tests for the @refactorer agent."""
+
+    def setUp(self):
+        self.args = make_args()
+
+    def test_refactorer_exists(self):
+        agents = dict(get_agents(self.args))
+        self.assertIn("refactorer", agents)
+
+    def test_refactorer_has_test_cmd(self):
+        self.args.test_cmd = "npm run test"
+        agents = dict(get_agents(self.args))
+        self.assertIn("npm run test", agents["refactorer"])
+
+    def test_refactorer_has_safety_rules(self):
+        agents = dict(get_agents(self.args))
+        self.assertIn("NEVER refactor without passing tests", agents["refactorer"])
+
+    def test_refactorer_has_commit_rule(self):
+        agents = dict(get_agents(self.args))
+        self.assertIn("commit between refactoring steps", agents["refactorer"])
+
+    def test_refactorer_within_30_lines(self):
+        agents = dict(get_agents(self.args))
+        lines = agents["refactorer"].strip().split("\n")
+        self.assertLessEqual(len(lines), 30)
+
+    def test_refactor_command_exists(self):
+        content = cmd_refactor()
+        self.assertIn("@refactorer", content)
+
+    def test_refactor_command_registered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = make_args(output_dir=tmp, create_root=True)
+            scaffold(args)
+            cmd_path = Path(tmp) / args.project_name / ".claude" / "commands" / "refactor.md"
+            self.assertTrue(cmd_path.exists())
+
+
+class TestDocsGeneratorAgent(unittest.TestCase):
+    """Tests for the @docs-generator agent."""
+
+    def setUp(self):
+        self.args = make_args()
+
+    def test_docs_generator_exists(self):
+        agents = dict(get_agents(self.args))
+        self.assertIn("docs-generator", agents)
+
+    def test_docs_generator_has_correct_tools(self):
+        agents = dict(get_agents(self.args))
+        self.assertIn("tools: [Read, Glob, Grep, Bash, Write]", agents["docs-generator"])
+
+    def test_docs_generator_has_rules(self):
+        agents = dict(get_agents(self.args))
+        self.assertIn("NEVER invent features", agents["docs-generator"])
+
+    def test_docs_generator_within_30_lines(self):
+        agents = dict(get_agents(self.args))
+        lines = agents["docs-generator"].strip().split("\n")
+        self.assertLessEqual(len(lines), 30)
+
+    def test_generate_docs_command_exists(self):
+        content = cmd_generate_docs()
+        self.assertIn("@docs-generator", content)
+
+    def test_generate_docs_command_registered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = make_args(output_dir=tmp, create_root=True)
+            scaffold(args)
+            cmd_path = Path(tmp) / args.project_name / ".claude" / "commands" / "generate-docs.md"
+            self.assertTrue(cmd_path.exists())
+
+
+class TestDebtTracking(unittest.TestCase):
+    """Tests for technical debt tracking."""
+
+    def test_debt_command_has_markers(self):
+        content = cmd_debt()
+        self.assertIn("TODO", content)
+        self.assertIn("FIXME", content)
+        self.assertIn("HACK", content)
+
+    def test_debt_command_has_severity(self):
+        content = cmd_debt()
+        self.assertIn("high", content)
+        self.assertIn("medium", content)
+        self.assertIn("low", content)
+
+    def test_debt_command_has_snapshot(self):
+        content = cmd_debt()
+        self.assertIn("debt-tracker.json", content)
+
+    def test_debt_command_has_trend(self):
+        content = cmd_debt()
+        self.assertIn("trend", content)
+
+    def test_debt_command_registered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = make_args(output_dir=tmp, create_root=True)
+            scaffold(args)
+            cmd_path = Path(tmp) / args.project_name / ".claude" / "commands" / "debt.md"
+            self.assertTrue(cmd_path.exists())
+
+
+class TestPipelineStateAndResume(unittest.TestCase):
+    """Tests for pipeline state tracking and resume."""
+
+    def setUp(self):
+        self.args = make_args()
+
+    def test_build_has_pipeline_state_tracking(self):
+        content = cmd_build()
+        self.assertIn("pipeline-state.json", content)
+
+    def test_build_has_quality_report(self):
+        content = cmd_build()
+        self.assertIn("Quality Report", content)
+        self.assertIn("build-reports", content)
+
+    def test_build_tdd_has_pipeline_state(self):
+        content = cmd_build(tdd=True)
+        self.assertIn("pipeline-state.json", content)
+
+    def test_build_domain_has_pipeline_state(self):
+        content = cmd_build(domain="finance")
+        self.assertIn("pipeline-state.json", content)
+
+    def test_build_tdd_domain_has_pipeline_state(self):
+        content = cmd_build(domain="finance", tdd=True)
+        self.assertIn("pipeline-state.json", content)
+
+    def test_resume_build_command_exists(self):
+        content = cmd_resume_build()
+        self.assertIn("pipeline-state.json", content)
+        self.assertIn("resume", content.lower())
+
+    def test_resume_build_command_registered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = make_args(output_dir=tmp, create_root=True)
+            scaffold(args)
+            cmd_path = Path(tmp) / args.project_name / ".claude" / "commands" / "resume-build.md"
+            self.assertTrue(cmd_path.exists())
+
+    def test_build_reports_dir_created(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = make_args(output_dir=tmp, create_root=True)
+            scaffold(args)
+            reports_dir = Path(tmp) / args.project_name / "docs" / "build-reports"
+            self.assertTrue(reports_dir.exists())
+
+
+class TestArchitectureDecisionRecords(unittest.TestCase):
+    """Tests for ADR support."""
+
+    def test_decision_command_has_template(self):
+        content = cmd_decision()
+        self.assertIn("Status", content)
+        self.assertIn("Context", content)
+        self.assertIn("Decision", content)
+        self.assertIn("Consequences", content)
+
+    def test_decision_command_has_numbering(self):
+        content = cmd_decision()
+        self.assertIn("NNN", content)
+
+    def test_decision_command_registered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = make_args(output_dir=tmp, create_root=True)
+            scaffold(args)
+            cmd_path = Path(tmp) / args.project_name / ".claude" / "commands" / "decision.md"
+            self.assertTrue(cmd_path.exists())
+
+    def test_decisions_dir_created(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = make_args(output_dir=tmp, create_root=True)
+            scaffold(args)
+            decisions_dir = Path(tmp) / args.project_name / "docs" / "decisions"
+            self.assertTrue(decisions_dir.exists())
+
+    def test_architect_references_adrs(self):
+        args = make_args()
+        agents = dict(get_agents(args))
+        self.assertIn("docs/decisions/", agents["architect"])
+
+    def test_architecture_md_has_adr_section(self):
+        args = make_args()
+        from scaffold import get_architecture_md
+        arch = get_architecture_md(args)
+        self.assertIn("Architecture Decision Records", arch)
+        self.assertIn("docs/decisions/", arch)
 
 
 if __name__ == "__main__":

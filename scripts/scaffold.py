@@ -118,18 +118,30 @@ Present: recent changes, branch state, test health, open TODOs, next action.
 
 def cmd_handoff():
     return """---
-description: Update session handoff document for context preservation
+description: Auto-capture session state and update handoff document
 ---
 
-Update `.claude/handoff.md` with the current session state:
-1. Read the current handoff document
-2. Update "What's Working" with completed items
-3. Update "In Progress" with current work
-4. Update "Known Issues" with any problems found
-5. Update "Next Steps" with recommended actions
-6. Save the file
+Auto-capture session state and update `.claude/handoff.md`:
 
-This preserves context for the next session.
+1. **Gather data** (run these commands):
+   - `git log --oneline -10` — recent commits
+   - `git diff --stat HEAD~5..HEAD 2>/dev/null` — scope of changes
+   - `git diff --name-only HEAD~5..HEAD 2>/dev/null | head -20` — changed files
+   - Check `docs/blueprints/` for in-flight features
+   - Scan recently changed files for TODO/FIXME markers
+
+2. **Read** the current `.claude/handoff.md`
+
+3. **Update each section**:
+   - **What's Working**: move completed "In Progress" items here, add newly passing features
+   - **In Progress**: current work based on git branch and recent changes
+   - **Known Issues**: any failing tests, lint errors, or bugs found this session
+   - **Next Steps**: recommended actions based on what was done
+   - **Architecture Decisions**: record any design choices made this session (with rationale)
+   - **Debt Items**: any TODOs/FIXMEs added or discovered
+   - **Session Metrics**: files changed, commits made, tests added/modified
+
+4. **Save** the file
 """
 
 def cmd_new_feature():
@@ -229,6 +241,22 @@ def cmd_build(domain="general", compliance=None, tdd=False, worktree=True):
     has_compliance = compliance and compliance != ['none'] and 'none' not in compliance
     has_domain_audit = has_domain or has_compliance
 
+    # Pipeline state tracking (common to all variants)
+    state_tracking = """
+**State tracking**: After each stage completes, update `.claude/pipeline-state.json`:
+`{"feature": "$ARGUMENTS", "stage": "<stage-name>", "status": "completed"}`
+If this file already exists for "$ARGUMENTS", offer to resume from the last completed stage.
+"""
+
+    # Post-build quality report (appended to Ship stage)
+    quality_report = """
+**Quality Report**: After shipping, write a build summary to `docs/build-reports/$ARGUMENTS.md`:
+- Tests: count, all passing?
+- Files changed: count
+- Review outcome: APPROVE / REQUEST_CHANGES
+- Debt: run `/debt` to check for new debt items
+"""
+
     # Worktree setup/cleanup steps
     worktree_setup = ""
     worktree_cleanup = ""
@@ -290,7 +318,7 @@ Execute the full development pipeline with context passing through blueprints:
    - Must be READY before shipping — fix any failures first
 
 {step + 5}. **Ship**: Run `@push Create PR for "$ARGUMENTS"`
-{worktree_cleanup}
+{worktree_cleanup}{quality_report}{state_tracking}
 Update `.claude/handoff.md` after completion.
 """
         else:
@@ -330,7 +358,7 @@ Execute the full development pipeline with context passing through blueprints:
    - Must be READY before shipping — fix any failures first
 
 {step + 5}. **Ship**: Run `@push Create PR for "$ARGUMENTS"`
-{worktree_cleanup}
+{worktree_cleanup}{quality_report}{state_tracking}
 Update `.claude/handoff.md` after completion.
 """
     else:
@@ -371,7 +399,7 @@ Execute the full development pipeline with context passing through blueprints:
    - Must be READY before shipping — fix any failures first
 
 {step + 6}. **Ship**: Run `@push Create PR for "$ARGUMENTS"`
-{worktree_cleanup}
+{worktree_cleanup}{quality_report}{state_tracking}
 Update `.claude/handoff.md` after completion.
 """
         else:
@@ -410,7 +438,7 @@ Execute the full development pipeline with context passing through blueprints:
    - Must be READY before shipping — fix any failures first
 
 {step + 6}. **Ship**: Run `@push Create PR for "$ARGUMENTS"`
-{worktree_cleanup}
+{worktree_cleanup}{quality_report}{state_tracking}
 Update `.claude/handoff.md` after completion.
 """
 
@@ -492,6 +520,111 @@ Rules:
 - NEVER force push — always regular push
 - If a CI failure is flaky (passes on retry), note it but don't change code
 - STOP if the fix would require architectural changes — escalate to @architect
+"""
+
+
+def cmd_refactor():
+    return """---
+description: Systematic refactoring with test safety guarantees
+---
+
+Refactoring: $ARGUMENTS
+
+Run `@refactorer Refactor "$ARGUMENTS"`
+
+The agent will:
+1. Establish test baseline (all tests must pass first)
+2. Refactor in small, committed steps
+3. Run tests after each change
+4. Verify no behavior change
+
+If tests don't pass before starting, fix them first.
+"""
+
+
+def cmd_generate_docs():
+    return """---
+description: Generate documentation from source code
+---
+
+Generate docs: $ARGUMENTS
+
+Run `@docs-generator Generate documentation for "$ARGUMENTS"`
+
+The agent will:
+1. Read source code for routes, components, types, exports
+2. Generate API docs, component docs, or README sections
+3. Include usage examples with realistic values
+4. Preserve any user-written documentation sections
+"""
+
+
+def cmd_debt():
+    return """---
+description: Scan for technical debt and track trends
+---
+
+Scan the codebase for technical debt:
+
+1. **Scan markers**: Search source files for `TODO`, `FIXME`, `HACK`, `XXX` markers
+   - Exclude: node_modules, .venv, vendor, dist, build, __pycache__, .next
+2. **Classify severity**:
+   - FIXME = high (broken or dangerous)
+   - HACK/XXX = medium (workaround or fragile)
+   - TODO = low (planned improvement)
+3. **Compare**: If `.claude/debt-tracker.json` exists, compare with previous snapshot
+   - Report: new debt items, resolved items, trend (up/down/stable)
+4. **Save snapshot**: Write current findings to `.claude/debt-tracker.json`
+5. **Report**: Group by file, show severity, total count, and trend
+"""
+
+
+def cmd_decision():
+    return """---
+description: Record an architecture decision (ADR)
+---
+
+Record architecture decision: $ARGUMENTS
+
+1. Check `docs/decisions/` for existing ADRs to determine the next number
+2. Create a new ADR file: `docs/decisions/NNN-$ARGUMENTS.md`
+3. Use this template:
+
+```markdown
+# NNN. $ARGUMENTS
+
+**Status**: proposed | accepted | deprecated | superseded by NNN
+
+**Date**: (today)
+
+## Context
+(What is the issue we're deciding about? What forces are at play?)
+
+## Decision
+(What is the change we're proposing or have agreed to?)
+
+## Consequences
+(What becomes easier or harder as a result of this decision?)
+```
+
+4. Ask for details to fill in the Context and Decision sections
+5. Save the file and suggest updating ARCHITECTURE.md if this changes the system design
+"""
+
+
+def cmd_resume_build():
+    return """---
+description: Resume an interrupted /build pipeline
+---
+
+Resume interrupted build pipeline:
+
+1. Read `.claude/pipeline-state.json` for the last pipeline state
+2. If no state file exists, say "No interrupted pipeline found — use /build to start a new one"
+3. Show: feature name, last completed stage, when it was interrupted
+4. Ask for confirmation to resume from the next stage
+5. Continue the /build pipeline from the next uncompleted stage
+6. Update `.claude/pipeline-state.json` after each stage completes
 """
 
 
@@ -1277,12 +1410,12 @@ def get_hooks(args):
     if post_hooks:
         hooks["PostToolUse"] = post_hooks
 
-    # Stop hook: remind to update handoff (only if handoff.md hasn't been updated recently)
+    # Stop hook: remind to update handoff if stale or if work was done since last update
     hooks["Stop"] = [{
         "matcher": "",
         "hooks": [{
             "type": "command",
-            "command": "if [ -f .claude/handoff.md ] && [ $(find .claude/handoff.md -mmin +30 2>/dev/null | wc -l) -gt 0 ]; then echo '💡 Handoff is >30min old — consider running /handoff'; fi"
+            "command": "if [ -f .claude/handoff.md ]; then STALE=$(find .claude/handoff.md -mmin +30 2>/dev/null | wc -l); RECENT=$(git log --oneline -1 --since='30 minutes ago' 2>/dev/null | wc -l); if [ $STALE -gt 0 ] || [ $RECENT -gt 0 ]; then echo '💡 Work done since last handoff — consider running /handoff'; fi; fi"
         }]
     }]
 
@@ -1344,7 +1477,7 @@ effort: high
 ---
 
 You are the principal architect for a {fe}/{be} project.
-1. Read CLAUDE.md, ARCHITECTURE.md, and .claude/rules/ for current patterns
+1. Read CLAUDE.md, ARCHITECTURE.md, and `docs/decisions/` for existing ADRs
 2. Assess which system parts this touches
 3. Design: data model changes, API contract, components affected
 4. Write blueprint to docs/blueprints/{{feature}}.md
@@ -1353,6 +1486,7 @@ You are the principal architect for a {fe}/{be} project.
 Blueprint format: Summary, Data Model Changes, API Changes, Components, Security, Test Plan, Risks.
 
 Rules:
+- Check `docs/decisions/` before proposing new patterns — respect existing ADRs
 - Prefer extending existing patterns over new ones
 - Keep solutions simple — complexity must be justified
 - Do NOT write code — produce blueprints only
@@ -1428,6 +1562,50 @@ Rules:
 - ALWAYS reproduce before fixing
 - ALWAYS write a regression test
 - STOP if you can't find root cause after investigation — document and escalate
+"""))
+
+    # refactorer — always
+    agents.append(("refactorer", f"""---
+name: refactorer
+description: Systematic refactoring with test safety guarantees
+tools: [Bash, Read, Write, Edit, Grep, Glob]
+model: sonnet
+---
+
+Refactoring methodology for {fe}/{be} stack:
+1. Identify scope: what code is changing, what depends on it
+2. Establish baseline: run `{test_cmd}` — must pass before starting
+3. Refactor in small steps — one logical change at a time
+4. Run `{test_cmd}` after each step — must stay green
+5. Verify: no behavior change, no new warnings from `{lint_cmd}`
+
+Rules:
+- NEVER refactor without passing tests first — establish the safety net
+- ALWAYS commit between refactoring steps — easy rollback if something breaks
+- NEVER change behavior during refactoring — that's a feature change, not a refactor
+- STOP if test coverage is too low for affected code — add tests first
+"""))
+
+    # docs-generator — always
+    agents.append(("docs-generator", f"""---
+name: docs-generator
+description: Generates API docs, component docs, and README sections from code
+tools: [Read, Glob, Grep, Bash, Write]
+model: sonnet
+---
+
+Documentation generation for {fe}/{be} project:
+1. Read source code: route handlers, component props/interfaces, exported functions
+2. Read existing docs to understand style and structure
+3. Generate/update API documentation from route definitions
+4. Generate component documentation from types and props
+5. Update README.md with current features, commands, and architecture
+
+Rules:
+- NEVER invent features not present in the code — document what exists
+- ALWAYS include usage examples with realistic values
+- NEVER overwrite user-written docs — add to or update sections marked as auto-generated
+- STOP if code lacks types or exports to document — suggest adding them first
 """))
 
     # push — always
@@ -2389,7 +2567,17 @@ def get_handoff(project_name):
 3. Start first feature with `/new-feature <feature-name>`
 
 ## Architecture Decisions
-(Record key decisions here as the project evolves)
+| Decision | Choice | Rationale | Date |
+|----------|--------|-----------|------|
+| (none yet) | | | |
+
+## Debt Items
+- (none tracked yet — run `/debt` to scan)
+
+## Session Metrics
+- Files changed: 0
+- Commits: 0
+- Tests added: 0
 """
 
 
@@ -2683,6 +2871,11 @@ def get_architecture_md(args):
         lines.append("(Document your auth flow here)")
     lines.append("")
 
+    # ADRs
+    lines.append("## Architecture Decision Records")
+    lines.append("Key decisions are recorded in `docs/decisions/`. Use `/decision` to add a new ADR.")
+    lines.append("")
+
     # Environment
     lines.append("## Environment Variables")
     lines.append("See `.env.example` for the complete list.")
@@ -2911,7 +3104,7 @@ def scaffold(args):
             d = project_dir / ".claude" / subdir
             if not d.exists():
                 d.mkdir(parents=True, exist_ok=True)
-        for docs_subdir in ("blueprints", "prds"):
+        for docs_subdir in ("blueprints", "prds", "decisions", "build-reports"):
             docs_dir = project_dir / "docs" / docs_subdir
             if not docs_dir.exists():
                 docs_dir.mkdir(parents=True, exist_ok=True)
@@ -2929,6 +3122,9 @@ def scaffold(args):
         "analyze": cmd_analyze(skill_path), "learn": cmd_learn(skill_path),
         "evolve": cmd_evolve(skill_path),
         "cloud-fix": cmd_cloud_fix(),
+        "refactor": cmd_refactor(), "generate-docs": cmd_generate_docs(),
+        "debt": cmd_debt(), "decision": cmd_decision(),
+        "resume-build": cmd_resume_build(),
     }
     if args.tdd:
         commands["tdd"] = cmd_tdd()
