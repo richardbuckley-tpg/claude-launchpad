@@ -17,7 +17,7 @@ Most Claude Code setup tools give you the same generic agents, commands, and rul
 | **Deep review** | None | 7-phase codebase assessment: architecture, security, testing, debt, recommendations |
 | **Build pipeline** | Manual steps | `/build` orchestrates agents with worktree isolation, parallel execution, state tracking |
 
-No external dependencies. Python 3.10+ stdlib only. 628 tests.
+No external dependencies. Python 3.10+ stdlib only. 638 tests.
 
 ---
 
@@ -25,11 +25,20 @@ No external dependencies. Python 3.10+ stdlib only. 628 tests.
 
 ### 1. Install
 
+**As a plugin (recommended)** — two commands:
+
+```bash
+claude plugin marketplace add richardbuckley-tpg/claude-launchpad
+claude plugin install claude-launchpad@launchpad
+```
+
+Update later with `claude plugin marketplace update launchpad`.
+
+**Or clone into your skills directory:**
+
 ```bash
 git clone https://github.com/richardbuckley-tpg/claude-launchpad.git ~/.claude/skills/claude-launchpad
 ```
-
-Or as a plugin: `claude plugin install github:richardbuckley-tpg/claude-launchpad`
 
 ### 2. Bootstrap
 
@@ -357,9 +366,9 @@ python scripts/audit.py /path/to/project --json         # JSON output
 ## Development
 
 ```bash
-# Run all tests (628 tests, stdlib only)
+# Run all tests (638 tests, stdlib only)
 cd scripts/
-python -m pytest test_scaffold.py test_audit.py test_analyze.py test_learn.py -v
+python -m pytest test_scaffold.py test_audit.py test_analyze.py test_learn.py test_plugin.py -v
 ```
 
 See [CHANGELOG.md](CHANGELOG.md) for release history.

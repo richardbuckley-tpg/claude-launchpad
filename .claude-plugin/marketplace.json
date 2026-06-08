@@ -1,0 +1,20 @@
+{
+  "name": "launchpad",
+  "owner": {
+    "name": "Richard Buckley",
+    "url": "https://github.com/richardbuckley-tpg"
+  },
+  "metadata": {
+    "description": "Claude Launchpad — bootstrap, audit, analyze, and evolve Claude Code configs.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "claude-launchpad",
+      "source": "./",
+      "description": "Interview-driven Claude Code bootstrapper with a config auditor, codebase analyzer, and learn/evolve loop. Generates a complete, token-lean .claude/ setup with real values.",
+      "category": "development",
+      "keywords": ["bootstrap", "scaffold", "audit", "analyze", "mcp", "agents"]
+    }
+  ]
+}

@@ -6,7 +6,7 @@ Lean, token-aware Claude Code bootstrapping skill with codebase analysis, learni
 
 ```
 cd scripts/
-python -m pytest test_scaffold.py test_audit.py test_analyze.py test_learn.py -v
+python -m pytest test_scaffold.py test_audit.py test_analyze.py test_learn.py test_plugin.py -v
 ```
 
 No external dependencies — stdlib only (Python 3.10+).
@@ -56,7 +56,7 @@ scripts/scaffold.py    — Scaffolder (generates .claude/ tree)
 scripts/analyze.py     — Codebase analyzer (extracts patterns → rules)
 scripts/learn.py       — Learning system (captures corrections)
 scripts/audit.py       — Auditor (scores config health)
-scripts/test_*.py      — Test suites (628 tests)
+scripts/test_*.py      — Test suites (638 tests)
 reference/stacks.md    — Stack patterns (Next.js, FastAPI, Go, Rails, Rust, etc.)
 reference/agents.md    — Agent templates and selection logic
 reference/audit-rules.md — Scoring rubric documentation

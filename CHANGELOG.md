@@ -5,6 +5,22 @@ All notable changes to Claude Launchpad are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — v8 (in progress)
+
+Flagship release in development (see `docs/ROADMAP-v8.md`). Landed so far:
+
+### Added — Pillar 2: plugin + marketplace distribution
+- `.claude-plugin/marketplace.json` — Launchpad is now an installable plugin:
+  `claude plugin marketplace add richardbuckley-tpg/claude-launchpad` then
+  `claude plugin install claude-launchpad@launchpad`.
+- Standardized `.claude-plugin/plugin.json` to the current manifest spec (author object,
+  homepage, keywords); the root `SKILL.md` auto-loads as the single-skill plugin.
+- `scripts/test_plugin.py` validates both manifests (required fields, source resolution,
+  version lockstep with the scaffolder).
+
+### Removed
+- The divergent, non-standard root `plugin.json` (Claude Code reads `.claude-plugin/plugin.json`).
+
 ## [7.0.0] - 2026-06-08
 
 Modernization for 2026-era Claude Code. Two of these changes fix correctness bugs
