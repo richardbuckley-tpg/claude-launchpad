@@ -17,7 +17,7 @@ Most Claude Code setup tools give you the same generic agents, commands, and rul
 | **Deep review** | None | 7-phase codebase assessment: architecture, security, testing, debt, recommendations |
 | **Build pipeline** | Manual steps | `/build` orchestrates agents with worktree isolation, parallel execution, state tracking |
 
-No external dependencies. Python 3.10+ stdlib only. 638 tests.
+No external dependencies. Python 3.10+ stdlib only. 649 tests.
 
 ---
 
@@ -71,6 +71,7 @@ Launchpad asks about your stack, then generates everything. Or skip the intervie
 | **Rules** | 2-5 | Path-scoped conventions from your actual code patterns |
 | **Skills** | 9-14 | Code generation templates + research-first workflow, as `skills/<name>/SKILL.md` (Agent Skills standard) |
 | **Hooks** | 4-6 | Auto-lint on save, auto-test (TDD), force-push block, secret detection |
+| **Workflows** | 3 | `/ultra-build`, `/ultra-review`, `/security-sweep` — parallel subagent orchestration with adversarial verification (dynamic workflows; prose commands are the fallback) |
 | **MCP Servers** | 1-3 | GitHub & Sentry (official remote HTTP), Postgres, docs — written to `.mcp.json` with `${ENV_VAR}` references |
 | **CI/CD** | 1 | GitHub Actions or GitLab CI with your actual commands |
 | **CLAUDE.md** | 1 | Lean project context (commands, stack, mistakes to avoid) |
@@ -366,7 +367,7 @@ python scripts/audit.py /path/to/project --json         # JSON output
 ## Development
 
 ```bash
-# Run all tests (638 tests, stdlib only)
+# Run all tests (649 tests, stdlib only)
 cd scripts/
 python -m pytest test_scaffold.py test_audit.py test_analyze.py test_learn.py test_plugin.py -v
 ```

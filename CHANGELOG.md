@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Flagship release in development (see `docs/ROADMAP-v8.md`). Landed so far:
 
+### Added — Pillar 1: native workflow orchestration
+- `get_workflows(args)` generates dynamic-workflow scripts into `.claude/workflows/`:
+  - `/ultra-build "<feature>"` — parallel design → spec → implement → review → verify,
+    dispatching to the project's architect/testing/reviewer/pre-push (and security/
+    compliance) agents, with conditional stages by stack/auth/domain.
+  - `/ultra-review ["<scope>"]` — multi-dimension review (stack-aware lenses) with every
+    finding adversarially verified before it's reported.
+  - `/security-sweep ["<scope>"]` — multi-lens security audit with a refutation pass.
+- Named `/ultra-*` so they never collide with the always-available prose commands
+  (`/build`, `/deep-review`), which remain the fallback when workflows are off. Scripts
+  cost ~0 context (executed, not loaded). Skip with `--no-workflows`.
+- Generated scripts are validated as real JavaScript (`node --check`) in the test suite.
+
 ### Added — Pillar 2: plugin + marketplace distribution
 - `.claude-plugin/marketplace.json` — Launchpad is now an installable plugin:
   `claude plugin marketplace add richardbuckley-tpg/claude-launchpad` then

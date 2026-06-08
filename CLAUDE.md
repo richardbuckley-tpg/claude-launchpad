@@ -34,6 +34,7 @@ No external dependencies — stdlib only (Python 3.10+).
 - `settings.json` carries hooks + `statusLine` + `fallbackModel: ["sonnet"]` via `get_settings()`; `VALID_SETTINGS_KEYS`/hook-event list track the current schema
 - Models/effort: agents use `opus`/`sonnet` aliases (Opus 4.8 / Sonnet 4.6); architect runs `effort: xhigh`; lineup, effort levels, and 1M-context guidance in `reference/agents.md`
 - Agent Teams (`--agent-teams`): generates `TaskCompleted`/`TeammateIdle` quality-gate hooks (inert outside team sessions)
+- Dynamic workflows (`get_workflows()`): generates `.claude/workflows/*.js` (`/ultra-build`, `/ultra-review`, `/security-sweep`) — parameterized scripts that orchestrate the project's agents with adversarial verification. Named `/ultra-*` so they never collide with the prose `/build`/`/deep-review` fallbacks; ~0 context cost; skip with `--no-workflows`
 - Hooks use `jq` for stdin JSON parsing with `command -v jq` fallback
 - Agents are parameterized with real stack/commands/STOP conditions via `get_agents()`
 - Domain auditor agents (compliance, frontend, architecture) generated when `--domain`/`--compliance` set
@@ -56,7 +57,7 @@ scripts/scaffold.py    — Scaffolder (generates .claude/ tree)
 scripts/analyze.py     — Codebase analyzer (extracts patterns → rules)
 scripts/learn.py       — Learning system (captures corrections)
 scripts/audit.py       — Auditor (scores config health)
-scripts/test_*.py      — Test suites (638 tests)
+scripts/test_*.py      — Test suites (649 tests)
 reference/stacks.md    — Stack patterns (Next.js, FastAPI, Go, Rails, Rust, etc.)
 reference/agents.md    — Agent templates and selection logic
 reference/audit-rules.md — Scoring rubric documentation

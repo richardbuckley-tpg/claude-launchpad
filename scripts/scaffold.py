@@ -1953,6 +1953,334 @@ def get_settings(args, hooks):
     return settings
 
 
+# ── Dynamic Workflows ────────────────────────────────────────────────────
+#
+# Saved workflow scripts live in `.claude/workflows/*.js` and become `/<name>`
+# slash commands when dynamic workflows are enabled (research preview, Claude
+# Code v2.1.154+). They orchestrate the project's own subagents in parallel with
+# adversarial verification. They cost ~0 context (executed, not loaded) and are
+# inert when workflows are disabled — the prose commands (/build, /deep-review)
+# remain the always-available fallback. Generated under /ultra-* names so they
+# never collide with or replace the reliable prose commands.
+
+
+ULTRA_BUILD_JS = r"""export const meta = {
+  name: 'ultra-build',
+  description: 'Parallel build pipeline for a __STACK__ project: design -> spec -> implement -> review -> verify',
+  phases: [
+    { title: 'Design' },
+    { title: 'Spec' },
+    { title: 'Implement' },
+    { title: 'Review' },
+    { title: 'Verify' },
+  ],
+}
+
+// Invoke as:  /ultra-build "<feature description>"
+const feature = (typeof args === 'string' && args) ? args
+  : (args && args.feature) ? args.feature
+  : 'the requested feature'
+const TEST = '__TEST__'
+const LINT = '__LINT__'
+const BUILD = '__BUILD__'
+
+phase('Design')
+const blueprint = await agent(
+  `You are the architect for a __STACK__ project. Design: ${feature}.
+Read CLAUDE.md, ARCHITECTURE.md, and docs/decisions/ for existing ADRs.
+Produce a blueprint (summary, data model, API changes, components, security, test plan, risks) and write it to docs/blueprints/.`,
+  { agentType: 'architect', label: 'design', phase: 'Design' }
+)
+
+phase('Spec')
+const spec = await parallel([
+__SECURITY_STAGE__  () => agent(
+    `Write FAILING tests for: ${feature}, from the blueprint. Do NOT read the implementation first. Run \`${TEST}\` to confirm they fail for the right reason.
+Blueprint:
+${blueprint}`,
+    { agentType: 'testing', label: 'tests', phase: 'Spec' }
+  ),
+])
+
+phase('Implement')
+const impl = await agent(
+  `Implement: ${feature}, from the blueprint until \`${TEST}\` passes. Address every review/security note. Keep changes minimal and idiomatic.
+Blueprint:
+${blueprint}
+Spec inputs:
+${JSON.stringify(spec)}`,
+  { label: 'implement', phase: 'Implement' }
+)
+
+phase('Review')
+const reviews = await parallel([
+  () => agent(
+    `Review the implementation of: ${feature}, for correctness, performance, and maintainability. Run \`${LINT}\` and \`${TEST}\`. List issues by severity; APPROVE or REQUEST CHANGES.`,
+    { agentType: 'reviewer', label: 'review', phase: 'Review' }
+  ),
+__DOMAIN_STAGE__])
+
+phase('Verify')
+const verify = await agent(
+  `Pre-push gate: run \`${LINT}\`, \`${TEST}\`, and \`${BUILD}\`. Scan for committed secrets and leftover debug code. Report PASS or FAIL with specifics.`,
+  { agentType: 'pre-push', label: 'verify', phase: 'Verify' }
+)
+
+return { feature, blueprint, reviews, verify }
+"""
+
+
+ULTRA_REVIEW_JS = r"""export const meta = {
+  name: 'ultra-review',
+  description: 'Deep multi-dimension code review with adversarial verification of every finding',
+  phases: [
+    { title: 'Review' },
+    { title: 'Verify' },
+    { title: 'Synthesize' },
+  ],
+}
+
+// Invoke as:  /ultra-review            (reviews the current branch diff)
+//             /ultra-review "src/api"  (reviews a path or scope)
+const SCOPE = (typeof args === 'string' && args) ? args
+  : (args && args.scope) ? args.scope
+  : 'the current branch diff (git diff main...HEAD); if empty, review the whole repository'
+
+const DIMENSIONS = [
+__DIMENSIONS__]
+
+const FINDINGS_SCHEMA = {
+  type: 'object',
+  properties: { findings: { type: 'array', items: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      file: { type: 'string' },
+      severity: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
+      detail: { type: 'string' },
+    },
+    required: ['title', 'file', 'severity', 'detail'],
+  } } },
+  required: ['findings'],
+}
+const VERDICT_SCHEMA = {
+  type: 'object',
+  properties: { real: { type: 'boolean' }, why: { type: 'string' } },
+  required: ['real', 'why'],
+}
+
+// Each dimension reviews, then its findings are adversarially verified as soon
+// as that review completes (pipeline — no barrier between dimensions).
+const reviewed = await pipeline(
+  DIMENSIONS,
+  d => agent(
+    `Review ${SCOPE} through the ${d.name} lens. ${d.prompt} Report concrete, file-anchored findings only.`,
+    { label: `review:${d.name}`, phase: 'Review', schema: FINDINGS_SCHEMA }
+  ),
+  (r, d) => parallel(((r && r.findings) || []).map(f => () =>
+    agent(
+      `Adversarially verify this ${d.name} finding. Default real=false unless you can confirm it directly from the code.
+Finding: ${f.title} (${f.file}) — ${f.detail}`,
+      { label: `verify:${f.file}`, phase: 'Verify', schema: VERDICT_SCHEMA }
+    ).then(v => ({ ...f, dimension: d.name, verdict: v }))
+  ))
+)
+
+const confirmed = reviewed.flat().filter(Boolean).filter(f => f.verdict && f.verdict.real)
+
+phase('Synthesize')
+const report = await agent(
+  `Synthesize a prioritized review report from these verified findings. Group by severity, reference the file for each, and give a one-line fix per item.
+${JSON.stringify(confirmed, null, 2)}`,
+  { label: 'synthesize', phase: 'Synthesize' }
+)
+
+return { scope: SCOPE, confirmed, report }
+"""
+
+
+SECURITY_SWEEP_JS = r"""export const meta = {
+  name: 'security-sweep',
+  description: 'Multi-lens security audit with adversarial verification',
+  phases: [
+    { title: 'Scan' },
+    { title: 'Verify' },
+    { title: 'Report' },
+  ],
+}
+
+// Invoke as:  /security-sweep            (whole repo)
+//             /security-sweep "src/auth" (a path or scope)
+const SCOPE = (typeof args === 'string' && args) ? args
+  : (args && args.scope) ? args.scope
+  : 'the whole repository'
+
+const LENSES = [
+  'authentication & authorization (broken access control, missing checks, IDOR)',
+  'input validation & injection (SQL/NoSQL/command/template injection, SSRF, path traversal)',
+  'secrets & configuration (hardcoded keys, leaked tokens, unsafe defaults)',
+  'sensitive data exposure (PII handling, over-broad responses, secrets in logs)',
+__SEC_EXTRA__]
+
+const BUG_SCHEMA = {
+  type: 'object',
+  properties: { findings: { type: 'array', items: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      file: { type: 'string' },
+      severity: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
+      detail: { type: 'string' },
+    },
+    required: ['title', 'file', 'severity', 'detail'],
+  } } },
+  required: ['findings'],
+}
+const VERDICT = {
+  type: 'object',
+  properties: { real: { type: 'boolean' }, exploitability: { type: 'string' }, why: { type: 'string' } },
+  required: ['real', 'why'],
+}
+
+phase('Scan')
+const found = (await parallel(LENSES.map(lens => () =>
+  agent(
+    `Audit ${SCOPE} for security issues through this lens: ${lens}. Report concrete, file-anchored findings only.`,
+    { label: 'scan', phase: 'Scan', schema: BUG_SCHEMA }
+  )
+))).filter(Boolean).flatMap(r => r.findings)
+
+phase('Verify')
+const verified = await parallel(found.map(f => () =>
+  agent(
+    `Try to REFUTE this security finding. Default real=false unless you can confirm it in the code AND describe how it is exploitable.
+${f.title} (${f.file}) — ${f.detail}`,
+    { label: 'verify', phase: 'Verify', schema: VERDICT }
+  ).then(v => ({ ...f, verdict: v }))
+))
+const real = verified.filter(f => f.verdict && f.verdict.real)
+
+phase('Report')
+const report = await agent(
+  `Write a security report from these confirmed findings, ordered by severity. For each: file, impact, and concrete remediation.
+${JSON.stringify(real, null, 2)}`,
+  { label: 'report', phase: 'Report' }
+)
+
+return { scope: SCOPE, confirmed: real, report }
+"""
+
+
+WORKFLOWS_README = """# Dynamic Workflows
+
+These `.js` files are **saved dynamic workflows**. When [dynamic workflows](https://code.claude.com/docs/en/workflows)
+are enabled (research preview, Claude Code v2.1.154+), each one becomes a `/<name>`
+slash command that orchestrates this project's own subagents in parallel, with
+adversarial verification of findings.
+
+| Command | What it does | Always-available fallback |
+|---|---|---|
+| `/ultra-build "<feature>"` | Parallel build pipeline for a __STACK__ project (design → spec → implement → review → verify) | `/build` (prose pipeline) |
+| `/ultra-review ["<scope>"]` | Multi-dimension review; every finding adversarially verified | `/deep-review`, `/code-review` |
+| `/security-sweep ["<scope>"]` | Multi-lens security audit with refutation pass | `@security` agent |
+
+**Enabling**: workflows are off by default on Pro — turn on the *Dynamic workflows*
+row in `/config`. On Max/Team/Enterprise/API they're available by default. If
+disabled, these commands simply don't appear and the prose commands above cover you.
+
+**Cost**: a run spawns many subagents, so it uses more tokens than a single pass.
+Try a narrow scope first (one directory) and watch `/workflows` for live token usage.
+
+**Notes**: these scripts cost ~0 context (they're executed, not loaded into the
+prompt). They invoke project agents via `agentType` — keep `.claude/agents/` in sync.
+Edit them like any code; re-run with `/workflows`.
+"""
+
+
+def get_workflows(args):
+    """Return list of (filename, content) for .claude/workflows/ scripts.
+
+    Scripts use the dynamic-workflow runtime API (export const meta + agent()/
+    parallel()/pipeline()/phase()). Parameterized with the project's stack,
+    commands, and agent types — no placeholders.
+    """
+    fe = args.frontend or "none"
+    be = args.backend or "none"
+    db = args.database or "none"
+    auth = getattr(args, "auth", "none") or "none"
+    ai = getattr(args, "ai", False)
+    domain = getattr(args, "domain", "general") or "general"
+    test_cmd = getattr(args, "test_cmd", None) or "npm run test"
+    lint_cmd = getattr(args, "lint_cmd", None) or "npm run lint"
+    build_cmd = getattr(args, "build_cmd", None) or "npm run build"
+    stack = "/".join(x for x in (fe, be, db) if x and x != "none") or "this"
+    has_security = auth != "none" or ai
+    has_domain = domain != "general"
+
+    def sub(text, **tokens):
+        for k, v in tokens.items():
+            text = text.replace("__" + k + "__", v)
+        return text
+
+    files = []
+
+    # ── ultra-build: parallel design → spec → implement → review → verify ──
+    security_stage = ""
+    if has_security:
+        security_stage = (
+            "    () => agent(\n"
+            "      `Security-review the blueprint for: ${feature}. Flag authz gaps, missing input "
+            "validation, secrets, injection, SSRF, and unsafe defaults.\\nBlueprint:\\n${blueprint}`,\n"
+            "      { agentType: 'security', label: 'security', phase: 'Spec' }\n"
+            "    ),\n"
+        )
+    domain_stage = ""
+    if has_domain:
+        domain_stage = (
+            "  () => agent(\n"
+            "    `Audit the implementation of: ${feature} for " + domain + " domain rules and "
+            "compliance. List violations by severity.`,\n"
+            "    { agentType: 'compliance-auditor', label: 'domain-audit', phase: 'Review' }\n"
+            "  ),\n"
+        )
+    ultra_build = sub(
+        ULTRA_BUILD_JS,
+        STACK=stack, TEST=test_cmd, LINT=lint_cmd, BUILD=build_cmd,
+        SECURITY_STAGE=security_stage, DOMAIN_STAGE=domain_stage,
+    )
+    files.append(("ultra-build.js", ultra_build))
+
+    # ── ultra-review: multi-dimension review, adversarially verified ──
+    dims = [
+        ("correctness", "Look for logic bugs, edge cases, race conditions, and incorrect error handling."),
+        ("security", "Look for authz gaps, injection, secrets, and unsafe input handling."),
+        ("maintainability", "Look for needless complexity, duplication, and unclear naming."),
+        ("testing", "Look for missing tests, weak assertions, and untested edge cases."),
+    ]
+    if fe != "none" or be != "none":
+        dims.append(("performance", "Look for N+1 queries, unnecessary re-renders, blocking I/O, and memory growth."))
+    if fe != "none":
+        dims.append(("accessibility", "Look for missing labels, keyboard traps, and contrast/ARIA issues."))
+    if db != "none":
+        dims.append(("data-integrity", "Look for missing transactions, unvalidated writes, and migration risks."))
+    dim_lines = "".join(
+        "  { name: '%s', prompt: '%s' },\n" % (name, prompt.replace("'", "\\'"))
+        for name, prompt in dims
+    )
+    files.append(("ultra-review.js", sub(ULTRA_REVIEW_JS, DIMENSIONS=dim_lines)))
+
+    # ── security-sweep: multi-lens finders → adversarial verify → report ──
+    sec_extra = ""
+    if has_domain:
+        sec_extra = "  '" + domain + "-specific regulatory & data-handling requirements',\n"
+    files.append(("security-sweep.js", sub(SECURITY_SWEEP_JS, SEC_EXTRA=sec_extra)))
+
+    # ── README documenting usage + fallback ──
+    files.append(("README.md", sub(WORKFLOWS_README, STACK=stack)))
+
+    return files
+
+
 # ── Agents ───────────────────────────────────────────────────────────────
 
 def get_agents(args):
@@ -3893,6 +4221,23 @@ def scaffold(args):
         msg += f" (skipped {skipped_rules} existing)"
     print(msg)
 
+    # 5b. Dynamic workflows (.claude/workflows/*.js) — /ultra-* power commands
+    if getattr(args, "workflows", True):
+        workflows_dir = project_dir / ".claude" / "workflows"
+        created_wf, skipped_wf = 0, 0
+        for filename, content in get_workflows(args):
+            fp = workflows_dir / filename
+            result = safe_write(fp, content, force, dry_run=dry_run)
+            if result == "skipped":
+                skipped_wf += 1
+            else:
+                created_wf += 1
+                created_files.append(f".claude/workflows/{filename}")
+        msg = f"  Created {created_wf} workflows"
+        if skipped_wf:
+            msg += f" (skipped {skipped_wf} existing)"
+        print(msg)
+
     # 6. Supporting files
     support_files = [
         ("claudeignore", ".claudeignore", get_claudeignore(args.frontend, args.backend)),
@@ -4210,6 +4555,7 @@ def main():
     p.add_argument("--team", action="store_true")
     p.add_argument("--tdd", action="store_true")
     p.add_argument("--no-worktree", action="store_false", dest="worktree", help="Disable git worktree isolation for /build")
+    p.add_argument("--no-workflows", action="store_false", dest="workflows", help="Skip generating .claude/workflows/ dynamic-workflow scripts")
     p.add_argument("--agent-teams", action="store_true", dest="agent_teams", help="Use Claude Code Agent Teams for /build pipeline (experimental)")
     p.add_argument("--conventional-commits", action="store_true")
     p.add_argument("--lint-cmd", default=None, help="Lint command (e.g., 'npm run lint')")

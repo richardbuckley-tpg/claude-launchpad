@@ -355,7 +355,12 @@ The `/build` command runs the development pipeline with git worktree isolation a
 
 **Agent Teams** (experimental, `--agent-teams`): Uses Claude Code Agent Teams for the `/build` pipeline — each agent runs as an independent session with direct messaging and shared task lists, enabling true parallel execution. Requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`. Use `/setup-teams` to enable. With this flag the scaffold also adds `TaskCompleted`/`TeammateIdle` quality-gate hooks (inert outside a team session).
 
-**Dynamic workflows / `ultracode`** (native, 2026): Claude Code can now author JavaScript orchestration scripts that fan out 10–1,000 subagents in parallel, and `/effort ultracode` (or the `ultracode` keyword) auto-orchestrates substantive tasks. The Launchpad `/build` pipeline (worktree isolation + parallel agents) composes with this — for large refactors or audits, ask for a workflow or run `ultracode` rather than driving the pipeline step by step.
+**Dynamic workflows (`/ultra-*`)**: Launchpad generates parameterized workflow scripts into `.claude/workflows/` that orchestrate the project's own subagents in parallel with adversarial verification:
+- `/ultra-build "<feature>"` — parallel design → spec → implement → review → verify
+- `/ultra-review ["<scope>"]` — multi-dimension review; every finding adversarially verified
+- `/security-sweep ["<scope>"]` — multi-lens security audit with a refutation pass
+
+These require dynamic workflows enabled (research preview, Claude Code v2.1.154+; toggle in `/config` on Pro). They're named `/ultra-*` so they never collide with the always-available prose commands (`/build`, `/deep-review`), which remain the fallback when workflows are off. The scripts cost ~0 context (executed, not loaded). Skip generation with `--no-workflows`. You can also run `/effort ultracode` or include `ultracode` in a prompt to have Claude author a one-off workflow for any task.
 
 > **Note on commands vs. skills**: Claude Code has merged custom commands into skills — a `.claude/commands/<name>.md` and a `.claude/skills/<name>/SKILL.md` both create `/name`. Launchpad still generates slash commands under `.claude/commands/` (fully supported); skills are generated as `.claude/skills/<name>/SKILL.md` directories per the Agent Skills standard.
 

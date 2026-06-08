@@ -27,6 +27,7 @@ from scaffold import (
     get_mcp_servers,
     get_hooks,
     get_settings,
+    get_workflows,
     get_agents,
     get_rules,
     get_lsp_recommendations,
@@ -723,6 +724,20 @@ class TestScaffoldEndToEnd(unittest.TestCase):
         args = make_args(output_dir=str(self.tmpdir), create_root=True, tdd=True)
         scaffold(args)
         self.assertTrue((self.tmpdir / "test-app" / ".claude" / "commands" / "tdd.md").exists())
+
+    def test_scaffold_writes_workflows_by_default(self):
+        args = make_args(output_dir=str(self.tmpdir), create_root=True)
+        scaffold(args)
+        wf = self.tmpdir / "test-app" / ".claude" / "workflows"
+        self.assertTrue((wf / "ultra-build.js").exists())
+        self.assertTrue((wf / "ultra-review.js").exists())
+        self.assertTrue((wf / "README.md").exists())
+
+    def test_no_workflows_flag_skips_them(self):
+        args = make_args(output_dir=str(self.tmpdir), create_root=True, workflows=False)
+        scaffold(args)
+        wf = self.tmpdir / "test-app" / ".claude" / "workflows"
+        self.assertFalse(wf.exists())
 
     def test_team_flag_adds_pipeline_command(self):
         args = make_args(output_dir=str(self.tmpdir), create_root=True, team=True)
@@ -2061,6 +2076,80 @@ class TestAgentFrontmatter(unittest.TestCase):
         self.args.domain = "finance"
         agents = dict(get_agents(self.args))
         self.assertIn("disallowedTools: [Write, Edit]", agents["architecture-auditor"])
+
+
+class TestGetWorkflows(unittest.TestCase):
+    """Dynamic-workflow script generation (.claude/workflows/*.js)."""
+
+    def test_generates_core_workflows_and_readme(self):
+        files = dict(get_workflows(make_args()))
+        for f in ("ultra-build.js", "ultra-review.js", "security-sweep.js", "README.md"):
+            self.assertIn(f, files)
+
+    def test_scripts_have_meta_and_phases(self):
+        for name, content in get_workflows(make_args(frontend="nextjs", database="postgresql")):
+            if name.endswith(".js"):
+                self.assertIn("export const meta", content, name)
+                self.assertIn("phases:", content, name)
+
+    def test_ultra_build_parameterized_with_commands_and_agents(self):
+        wf = dict(get_workflows(make_args(
+            frontend="nextjs", backend="integrated", database="postgresql",
+            test_cmd="pnpm test", lint_cmd="biome check", build_cmd="pnpm build")))
+        b = wf["ultra-build.js"]
+        self.assertIn("'pnpm test'", b)
+        self.assertIn("'biome check'", b)
+        self.assertIn("'pnpm build'", b)
+        for agent_type in ("architect", "testing", "reviewer", "pre-push"):
+            self.assertIn(f"agentType: '{agent_type}'", b)
+
+    def test_security_stage_conditional_on_auth(self):
+        with_auth = dict(get_workflows(make_args(auth="clerk")))["ultra-build.js"]
+        no_auth = dict(get_workflows(make_args(auth="none", ai=False)))["ultra-build.js"]
+        self.assertIn("agentType: 'security'", with_auth)
+        self.assertNotIn("agentType: 'security'", no_auth)
+
+    def test_domain_audit_stage_conditional(self):
+        fin = dict(get_workflows(make_args(domain="finance", compliance=["sox"])))["ultra-build.js"]
+        gen = dict(get_workflows(make_args(domain="general")))["ultra-build.js"]
+        self.assertIn("agentType: 'compliance-auditor'", fin)
+        self.assertNotIn("agentType: 'compliance-auditor'", gen)
+
+    def test_review_dimensions_stack_aware(self):
+        fe = dict(get_workflows(make_args(frontend="nextjs", database="postgresql")))["ultra-review.js"]
+        self.assertIn("accessibility", fe)       # frontend present
+        self.assertIn("data-integrity", fe)      # database present
+        be_only = dict(get_workflows(make_args(frontend="none", backend="go", database="none")))["ultra-review.js"]
+        self.assertNotIn("accessibility", be_only)
+        self.assertNotIn("data-integrity", be_only)
+
+    def test_security_sweep_domain_lens_conditional(self):
+        fin = dict(get_workflows(make_args(domain="finance")))["security-sweep.js"]
+        gen = dict(get_workflows(make_args(domain="general")))["security-sweep.js"]
+        self.assertIn("finance-specific", fin)
+        self.assertNotIn("-specific regulatory", gen)
+
+    def test_readme_documents_fallback(self):
+        readme = dict(get_workflows(make_args()))["README.md"]
+        self.assertIn("/build", readme)        # the prose fallback
+        self.assertIn("research preview", readme)
+
+    def test_generated_scripts_are_valid_javascript(self):
+        # Real syntax check via `node --check` when Node is available.
+        import shutil, subprocess, tempfile
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node not installed")
+        for name, content in get_workflows(make_args(
+                frontend="nextjs", backend="integrated", database="postgresql",
+                auth="clerk", domain="finance", compliance=["sox"])):
+            if not name.endswith(".js"):
+                continue
+            with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as fh:
+                fh.write(content)
+                path = fh.name
+            r = subprocess.run([node, "--check", path], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, f"{name} is not valid JS:\n{r.stderr}")
 
 
 class TestNewHookEvents(unittest.TestCase):
