@@ -739,6 +739,15 @@ class TestScaffoldEndToEnd(unittest.TestCase):
         wf = self.tmpdir / "test-app" / ".claude" / "workflows"
         self.assertFalse(wf.exists())
 
+    def test_deep_analyze_command_generated(self):
+        args = make_args(output_dir=str(self.tmpdir), create_root=True)
+        scaffold(args)
+        cmd = self.tmpdir / "test-app" / ".claude" / "commands" / "deep-analyze.md"
+        self.assertTrue(cmd.exists())
+        body = cmd.read_text()
+        self.assertIn("analyze.py", body)
+        self.assertIn("project-semantic.md", body)
+
     def test_team_flag_adds_pipeline_command(self):
         args = make_args(output_dir=str(self.tmpdir), create_root=True, team=True)
         scaffold(args)
@@ -2083,8 +2092,16 @@ class TestGetWorkflows(unittest.TestCase):
 
     def test_generates_core_workflows_and_readme(self):
         files = dict(get_workflows(make_args()))
-        for f in ("ultra-build.js", "ultra-review.js", "security-sweep.js", "README.md"):
+        for f in ("ultra-build.js", "ultra-review.js", "security-sweep.js",
+                  "semantic-analyze.js", "README.md"):
             self.assertIn(f, files)
+
+    def test_semantic_analyze_references_analyzer(self):
+        files = dict(get_workflows(make_args(), skill_path="/opt/launchpad"))
+        s = files["semantic-analyze.js"]
+        self.assertIn("/opt/launchpad/scripts/analyze.py", s)
+        self.assertIn("project-semantic.md", s)
+        self.assertIn("ARCHITECTURE.md", s)
 
     def test_scripts_have_meta_and_phases(self):
         for name, content in get_workflows(make_args(frontend="nextjs", database="postgresql")):

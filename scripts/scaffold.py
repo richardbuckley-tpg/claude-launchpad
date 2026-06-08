@@ -794,6 +794,29 @@ Analyze the codebase to detect patterns and generate targeted rules:
 This replaces generic framework rules with project-specific ones based on actual code.
 
 For a comprehensive assessment, run `/deep-review` to produce a full project review.
+For deeper, LLM-powered convention extraction, run `/deep-analyze`.
+"""
+
+
+def cmd_deep_analyze(skill_path):
+    return f"""---
+description: Deep semantic codebase analysis — extract real conventions, refresh rules & ARCHITECTURE.md
+---
+
+Run a deep, LLM-powered analysis of this codebase to capture conventions a regex misses.
+
+> If dynamic workflows are enabled, prefer the parallel `/semantic-analyze` workflow.
+> This prose version is the always-available fallback using subagents.
+
+1. **Signals**: run `python3 {skill_path}/scripts/analyze.py .` for cheap structural facts (stack, entry points, file organization).
+2. **Survey**: list the 4-10 most important source subsystems to read (exclude tests, build output, vendored code).
+3. **Extract** (one subagent per subsystem): read each and capture the IMPLICIT conventions — how errors are wrapped/propagated, how inputs are validated, how auth/permission checks are applied, how data access is structured, plus naming and layering idioms. Concrete, file-anchored, project-specific.
+4. **Synthesize**:
+   - Write path-scoped rules to `.claude/rules/project-semantic.md` (YAML `globs:` + `description:`, concise bullets, ≤20 lines).
+   - Refresh `ARCHITECTURE.md`'s component overview and mermaid diagram to match reality — don't overwrite unverifiable prose.
+5. **Verify**: run `python3 {skill_path}/scripts/audit.py .` and show what changed.
+
+This complements `/analyze` (regex patterns) and `/deep-review` (assessment) with deep convention extraction.
 """
 
 
@@ -2171,6 +2194,81 @@ return { scope: SCOPE, confirmed: real, report }
 """
 
 
+SEMANTIC_ANALYZE_JS = r"""export const meta = {
+  name: 'semantic-analyze',
+  description: 'LLM-powered codebase analysis: extract conventions a regex misses, then refresh rules + ARCHITECTURE.md',
+  phases: [
+    { title: 'Survey' },
+    { title: 'Extract' },
+    { title: 'Synthesize' },
+  ],
+}
+
+// Hybrid: cheap regex signals from the project analyzer first, then agents read
+// each subsystem to extract the IMPLICIT conventions a regex can't see.
+const ANALYZER = '__ANALYZER__'
+
+phase('Survey')
+const SUBSYS_SCHEMA = {
+  type: 'object',
+  properties: { subsystems: { type: 'array', items: {
+    type: 'object',
+    properties: {
+      name: { type: 'string' },
+      path: { type: 'string' },
+      role: { type: 'string' },
+    },
+    required: ['name', 'path'],
+  } } },
+  required: ['subsystems'],
+}
+const survey = await agent(
+  `Map this __STACK__ repository into its major source subsystems for review.
+First run the structural analyzer for cheap signals: \`python3 ${ANALYZER} .\`
+Then list the 4-10 most important source subsystems (directory paths) a reviewer should read. Exclude tests, build output, and vendored/third-party code.`,
+  { label: 'survey', phase: 'Survey', schema: SUBSYS_SCHEMA }
+)
+const subsystems = (((survey && survey.subsystems) || [])).slice(0, 10)
+
+phase('Extract')
+const CONV_SCHEMA = {
+  type: 'object',
+  properties: { conventions: { type: 'array', items: {
+    type: 'object',
+    properties: {
+      category: { type: 'string' },
+      rule: { type: 'string' },
+      example: { type: 'string' },
+      glob: { type: 'string' },
+    },
+    required: ['category', 'rule', 'example'],
+  } } },
+  required: ['conventions'],
+}
+const perSub = await pipeline(
+  subsystems,
+  s => agent(
+    `Read the ${s.name} subsystem at ${s.path}. Extract the IMPLICIT conventions a regex would miss: how errors are wrapped and propagated, how inputs are validated, how auth/permission checks are applied, how data access is structured, and any naming/layering idioms. Report concrete, file-anchored conventions only — not generic framework advice.`,
+    { label: `extract:${s.name}`, phase: 'Extract', schema: CONV_SCHEMA }
+  )
+)
+const conventions = perSub.flat().filter(Boolean).flatMap(r => (r && r.conventions) || [])
+
+phase('Synthesize')
+const report = await agent(
+  `You are given conventions extracted from this codebase. De-duplicate and merge them, then:
+1. Write path-scoped rules to .claude/rules/project-semantic.md — YAML frontmatter with a \`globs:\` list and a \`description:\`, then concise bullet rules grouped by area. Keep it under ~20 lines.
+2. Refresh ARCHITECTURE.md: update the component overview and the mermaid diagram to match what the conventions reveal. Do NOT overwrite hand-written prose you cannot verify — only the structural sections.
+3. Run \`python3 ${ANALYZER} . \` style checks are optional; finish by listing exactly what you wrote.
+Conventions:
+${JSON.stringify(conventions, null, 2)}`,
+  { label: 'synthesize', phase: 'Synthesize' }
+)
+
+return { subsystems: subsystems.length, conventions: conventions.length, report }
+"""
+
+
 WORKFLOWS_README = """# Dynamic Workflows
 
 These `.js` files are **saved dynamic workflows**. When [dynamic workflows](https://code.claude.com/docs/en/workflows)
@@ -2183,6 +2281,7 @@ adversarial verification of findings.
 | `/ultra-build "<feature>"` | Parallel build pipeline for a __STACK__ project (design → spec → implement → review → verify) | `/build` (prose pipeline) |
 | `/ultra-review ["<scope>"]` | Multi-dimension review; every finding adversarially verified | `/deep-review`, `/code-review` |
 | `/security-sweep ["<scope>"]` | Multi-lens security audit with refutation pass | `@security` agent |
+| `/semantic-analyze` | LLM-powered convention extraction → refreshes rules + ARCHITECTURE.md | `/deep-analyze`, `/analyze` |
 
 **Enabling**: workflows are off by default on Pro — turn on the *Dynamic workflows*
 row in `/config`. On Max/Team/Enterprise/API they're available by default. If
@@ -2197,13 +2296,15 @@ Edit them like any code; re-run with `/workflows`.
 """
 
 
-def get_workflows(args):
+def get_workflows(args, skill_path=None):
     """Return list of (filename, content) for .claude/workflows/ scripts.
 
     Scripts use the dynamic-workflow runtime API (export const meta + agent()/
     parallel()/pipeline()/phase()). Parameterized with the project's stack,
     commands, and agent types — no placeholders.
     """
+    if skill_path is None:
+        skill_path = str(Path(__file__).resolve().parent.parent)
     fe = args.frontend or "none"
     be = args.backend or "none"
     db = args.database or "none"
@@ -2274,6 +2375,11 @@ def get_workflows(args):
     if has_domain:
         sec_extra = "  '" + domain + "-specific regulatory & data-handling requirements',\n"
     files.append(("security-sweep.js", sub(SECURITY_SWEEP_JS, SEC_EXTRA=sec_extra)))
+
+    # ── semantic-analyze: hybrid regex signals → per-subsystem convention
+    #    extraction → synthesize project rules + ARCHITECTURE.md ──
+    files.append(("semantic-analyze.js", sub(
+        SEMANTIC_ANALYZE_JS, STACK=stack, ANALYZER=skill_path + "/scripts/analyze.py")))
 
     # ── README documenting usage + fallback ──
     files.append(("README.md", sub(WORKFLOWS_README, STACK=stack)))
@@ -4127,7 +4233,8 @@ def scaffold(args):
         "idea-to-prd": cmd_idea_to_prd(),
         "audit": cmd_audit(skill_path),
         "build": cmd_build_teams(getattr(args, 'domain', 'general'), getattr(args, 'compliance', ['none']), args.tdd) if getattr(args, 'agent_teams', False) else cmd_build(getattr(args, 'domain', 'general'), getattr(args, 'compliance', ['none']), args.tdd, getattr(args, 'worktree', True)),
-        "analyze": cmd_analyze(skill_path), "learn": cmd_learn(skill_path),
+        "analyze": cmd_analyze(skill_path), "deep-analyze": cmd_deep_analyze(skill_path),
+        "learn": cmd_learn(skill_path),
         "evolve": cmd_evolve(skill_path),
         "cloud-fix": cmd_cloud_fix(),
         "refactor": cmd_refactor(), "generate-docs": cmd_generate_docs(),
@@ -4225,7 +4332,7 @@ def scaffold(args):
     if getattr(args, "workflows", True):
         workflows_dir = project_dir / ".claude" / "workflows"
         created_wf, skipped_wf = 0, 0
-        for filename, content in get_workflows(args):
+        for filename, content in get_workflows(args, skill_path):
             fp = workflows_dir / filename
             result = safe_write(fp, content, force, dry_run=dry_run)
             if result == "skipped":

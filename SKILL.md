@@ -359,6 +359,7 @@ The `/build` command runs the development pipeline with git worktree isolation a
 - `/ultra-build "<feature>"` — parallel design → spec → implement → review → verify
 - `/ultra-review ["<scope>"]` — multi-dimension review; every finding adversarially verified
 - `/security-sweep ["<scope>"]` — multi-lens security audit with a refutation pass
+- `/semantic-analyze` — hybrid analysis: regex signals (`analyze.py`) then per-subsystem agents extract conventions a regex misses → writes `.claude/rules/project-semantic.md` + refreshes ARCHITECTURE.md (prose fallback: `/deep-analyze`)
 
 These require dynamic workflows enabled (research preview, Claude Code v2.1.154+; toggle in `/config` on Pro). They're named `/ultra-*` so they never collide with the always-available prose commands (`/build`, `/deep-review`), which remain the fallback when workflows are off. The scripts cost ~0 context (executed, not loaded). Skip generation with `--no-workflows`. You can also run `/effort ultracode` or include `ultracode` in a prompt to have Claude author a one-off workflow for any task.
 

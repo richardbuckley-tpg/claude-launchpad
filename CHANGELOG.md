@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Flagship release in development (see `docs/ROADMAP-v8.md`). Landed so far:
 
+### Added — Pillar 4: semantic codebase analysis
+- `/semantic-analyze` workflow (`get_workflows`) — hybrid analysis: runs the cheap
+  `analyze.py` regex pass for structural signals, then fans out one agent per
+  subsystem to extract the IMPLICIT conventions a regex misses (how errors are
+  wrapped, inputs validated, auth applied, data accessed, naming/layering idioms),
+  then synthesizes `.claude/rules/project-semantic.md` and refreshes ARCHITECTURE.md.
+- `/deep-analyze` prose command (`cmd_deep_analyze`) — the always-available
+  subagent-based fallback when dynamic workflows are off.
+- `get_workflows` now takes `skill_path` so the workflow can invoke the project's
+  analyzer; the generated script is validated as real JS (`node --check`).
+
 ### Added — Pillar 1: native workflow orchestration
 - `get_workflows(args)` generates dynamic-workflow scripts into `.claude/workflows/`:
   - `/ultra-build "<feature>"` — parallel design → spec → implement → review → verify,
