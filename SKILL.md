@@ -426,6 +426,15 @@ python <skill-path>/scripts/audit.py <project-root>
 
 The auditor also detects staleness automatically — if project-*.md rules reference files that no longer exist or if the analysis is >60 days old, it flags warnings suggesting `/evolve`.
 
+### Living Config Health
+
+Generated projects keep their config fresh automatically. A `SessionStart` hook runs
+`audit.py --drift` — a fast, high-signal freshness scan — at most **once a day**, silent
+when healthy and never blocking. It only nags about *genuine* drift (analyzer-generated
+`project-*.md` rules pointing at files that have since vanished, or stale analysis), so a
+freshly scaffolded project stays quiet. Run **`/config-health`** any time for an on-demand
+drift report with fix guidance; act on it with `/evolve`.
+
 ---
 
 ## Audit Mode

@@ -465,6 +465,20 @@ def check_stale_analyzer_rules(project_dir: Path, result: AuditResult):
             pass
 
 
+def drift_check(project_dir: Path) -> list:
+    """Fast drift scan for the living-health hook — high signal, low noise.
+
+    Reports only *genuine* drift: analyzer-generated `project-*.md` rules that
+    reference files which have since vanished, and an outdated analysis
+    timestamp. Both only exist after `/analyze`, so a freshly scaffolded project
+    (whose generic rules legitimately point at not-yet-written paths like `src/`)
+    stays silent. The broader path-validation lives in the full `/audit`.
+    """
+    result = AuditResult()
+    check_stale_analyzer_rules(project_dir, result)
+    return [i for i in result.issues if i.get("category") == "freshness"]
+
+
 # Packages whose addition/removal likely requires config changes
 SIGNIFICANT_PACKAGES = {
     "test": ["jest", "vitest", "pytest", "mocha", "@playwright/test", "cypress"],
@@ -1010,12 +1024,29 @@ def main():
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     parser.add_argument("--fix", action="store_true", help="Apply safe fixes automatically")
     parser.add_argument("--recommend", action="store_true", help="Show recommendations for improving config")
+    parser.add_argument("--drift", action="store_true", help="Fast freshness-only drift check (for the living-health hook); never blocks")
     args = parser.parse_args()
 
     project_dir = Path(args.project_dir).resolve()
     if not project_dir.exists():
         print(f"Error: {project_dir} does not exist", file=sys.stderr)
         sys.exit(1)
+
+    if args.drift:
+        issues = drift_check(project_dir)
+        if args.json:
+            print(json.dumps({"drift": len(issues), "issues": issues}, indent=2))
+            sys.exit(0)
+        # Silent when healthy — the whole point is not to nag.
+        if issues:
+            n = len(issues)
+            print(f"⚠ Config drift: {n} stale reference{'s' if n != 1 else ''} detected.")
+            for i in issues[:3]:
+                print(f"  • {i['message']}")
+            if n > 3:
+                print(f"  • …and {n - 3} more")
+            print("  Run /config-health for details, or /evolve to refresh rules.")
+        sys.exit(0)  # never block a session on drift
 
     if args.fix:
         # Run audit first to identify issues

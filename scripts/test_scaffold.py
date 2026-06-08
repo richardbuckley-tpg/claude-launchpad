@@ -748,6 +748,13 @@ class TestScaffoldEndToEnd(unittest.TestCase):
         self.assertIn("analyze.py", body)
         self.assertIn("project-semantic.md", body)
 
+    def test_config_health_command_generated(self):
+        args = make_args(output_dir=str(self.tmpdir), create_root=True)
+        scaffold(args)
+        cmd = self.tmpdir / "test-app" / ".claude" / "commands" / "config-health.md"
+        self.assertTrue(cmd.exists())
+        self.assertIn("--drift", cmd.read_text())
+
     def test_team_flag_adds_pipeline_command(self):
         args = make_args(output_dir=str(self.tmpdir), create_root=True, team=True)
         scaffold(args)
@@ -2052,6 +2059,15 @@ class TestAgentFrontmatter(unittest.TestCase):
         hooks = get_hooks(make_args())
         self.assertNotIn("TaskCompleted", hooks)
         self.assertNotIn("TeammateIdle", hooks)
+
+    def test_session_start_has_rate_limited_drift_check(self):
+        hooks = get_hooks(make_args(), skill_path="/opt/launchpad")
+        cmds = [h["command"] for e in hooks["SessionStart"] for h in e["hooks"]]
+        drift = [c for c in cmds if "--drift" in c]
+        self.assertTrue(drift, "SessionStart should include a drift check")
+        self.assertIn("/opt/launchpad/scripts/audit.py", drift[0])
+        self.assertIn(".drift-last", drift[0])   # rate-limited
+        self.assertIn("|| true", drift[0])        # never blocks
 
     def test_security_has_disallowed_tools(self):
         self.args.auth = "clerk"

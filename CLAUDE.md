@@ -36,6 +36,7 @@ No external dependencies — stdlib only (Python 3.10+).
 - Agent Teams (`--agent-teams`): generates `TaskCompleted`/`TeammateIdle` quality-gate hooks (inert outside team sessions)
 - Dynamic workflows (`get_workflows(args, skill_path)`): generates `.claude/workflows/*.js` (`/ultra-build`, `/ultra-review`, `/security-sweep`, `/semantic-analyze`) — parameterized scripts that orchestrate the project's agents with adversarial verification. Named to avoid colliding with the prose fallbacks; ~0 context cost; skip with `--no-workflows`
 - Semantic analysis (P4): `/semantic-analyze` workflow + `/deep-analyze` prose command (`cmd_deep_analyze`) do hybrid analysis — cheap `analyze.py` regex signals first, then per-subsystem agents extract conventions a regex misses → write `.claude/rules/project-semantic.md` + refresh ARCHITECTURE.md
+- Living config health (P3): `audit.py --drift` is a high-signal, low-noise freshness scan (`drift_check()` — only analyzer-generated `project-*.md` drift + stale analysis, so a fresh scaffold stays silent). A rate-limited (`.claude/.drift-last`, daily) `SessionStart` hook runs it non-blocking; `/config-health` (`cmd_config_health`) is the on-demand report
 - Hooks use `jq` for stdin JSON parsing with `command -v jq` fallback
 - Agents are parameterized with real stack/commands/STOP conditions via `get_agents()`
 - Domain auditor agents (compliance, frontend, architecture) generated when `--domain`/`--compliance` set
@@ -58,7 +59,7 @@ scripts/scaffold.py    — Scaffolder (generates .claude/ tree)
 scripts/analyze.py     — Codebase analyzer (extracts patterns → rules)
 scripts/learn.py       — Learning system (captures corrections)
 scripts/audit.py       — Auditor (scores config health)
-scripts/test_*.py      — Test suites (651 tests)
+scripts/test_*.py      — Test suites (656 tests)
 reference/stacks.md    — Stack patterns (Next.js, FastAPI, Go, Rails, Rust, etc.)
 reference/agents.md    — Agent templates and selection logic
 reference/audit-rules.md — Scoring rubric documentation

@@ -17,7 +17,7 @@ Most Claude Code setup tools give you the same generic agents, commands, and rul
 | **Deep review** | None | 7-phase codebase assessment: architecture, security, testing, debt, recommendations |
 | **Build pipeline** | Manual steps | `/build` orchestrates agents with worktree isolation, parallel execution, state tracking |
 
-No external dependencies. Python 3.10+ stdlib only. 651 tests.
+No external dependencies. Python 3.10+ stdlib only. 656 tests.
 
 ---
 
@@ -115,6 +115,7 @@ Launchpad asks about your stack, then generates everything. Or skip the intervie
 | `/learn <correction>` | Teach Claude a project-specific rule that persists |
 | `/evolve` | Re-analyze codebase with learned corrections, update rules |
 | `/audit` | Check config health, token cost, staleness |
+| `/config-health` | Detect config drift — stale rules, vanished paths, outdated analysis (also runs daily at session start) |
 | `/analyze` | Detect code patterns, generate project-specific rules |
 | `/deep-analyze` | LLM-powered convention extraction → project rules + refreshed ARCHITECTURE.md |
 | `/new-feature <name>` | Create branch, read context, present plan for approval |
@@ -368,7 +369,7 @@ python scripts/audit.py /path/to/project --json         # JSON output
 ## Development
 
 ```bash
-# Run all tests (651 tests, stdlib only)
+# Run all tests (656 tests, stdlib only)
 cd scripts/
 python -m pytest test_scaffold.py test_audit.py test_analyze.py test_learn.py test_plugin.py -v
 ```

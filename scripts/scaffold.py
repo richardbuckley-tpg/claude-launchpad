@@ -222,6 +222,25 @@ Run the Claude Launchpad auditor on this project:
 5. For recommendations: `python3 {skill_path}/scripts/audit.py . --recommend`
 """
 
+
+def cmd_config_health(skill_path):
+    return f"""---
+description: Check config drift — stale rules, vanished paths, outdated analysis
+---
+
+Report on the freshness of this project's Claude Code config and fix any drift:
+1. Run the drift scan: `python3 {skill_path}/scripts/audit.py . --drift`
+2. For a full score + token budget: `python3 {skill_path}/scripts/audit.py .`
+3. For each drift item, act:
+   - Stale rule path / vanished file reference → update the rule, or run `/evolve` to re-analyze.
+   - Outdated analysis → run `/evolve` (re-analyzes with learned corrections, updates rules, re-audits).
+   - CLAUDE.md references a command that doesn't exist → create it or remove the reference.
+4. Summarize what changed.
+
+A rate-limited drift check also runs automatically at session start (silent when healthy, never blocks).
+"""
+
+
 def cmd_tdd():
     return """---
 description: Start a TDD red-green-refactor cycle
@@ -1791,8 +1810,10 @@ def get_mcp_servers(args):
 
 # ── Hooks ───────────────────────────────────────────────────────────────
 
-def get_hooks(args):
+def get_hooks(args, skill_path=None):
     """Return hooks configuration based on interview answers."""
+    if skill_path is None:
+        skill_path = str(Path(__file__).resolve().parent.parent)
     hooks = {}
 
     # PreToolUse hooks
@@ -1896,13 +1917,28 @@ def get_hooks(args):
         }]
     }]
 
-    # SessionStart: inject project context at session start
+    # SessionStart: inject project context + a rate-limited config-drift check.
+    # The drift check runs at most once a day, is silent when the config is
+    # healthy, and never blocks — living config health without the nagging.
+    drift_cmd = (
+        "S=.claude/.drift-last; "
+        "if [ -f \"$S\" ] && [ -n \"$(find \"$S\" -mtime -1 2>/dev/null)\" ]; then exit 0; fi; "
+        "touch \"$S\" 2>/dev/null; "
+        "command -v python3 >/dev/null 2>&1 && "
+        f"python3 \"{skill_path}/scripts/audit.py\" . --drift 2>/dev/null || true"
+    )
     hooks["SessionStart"] = [{
         "matcher": "",
-        "hooks": [{
-            "type": "command",
-            "command": "if [ -f .claude/handoff.md ]; then echo '📋 Previous session context loaded from .claude/handoff.md'; fi"
-        }]
+        "hooks": [
+            {
+                "type": "command",
+                "command": "if [ -f .claude/handoff.md ]; then echo '📋 Previous session context loaded from .claude/handoff.md'; fi"
+            },
+            {
+                "type": "command",
+                "command": drift_cmd
+            },
+        ]
     }]
 
     # PreCompact: remind to save important context before compaction
@@ -4243,6 +4279,7 @@ def scaffold(args):
         "deep-review": cmd_deep_review(skill_path),
         "quality-gate": cmd_quality_gate(),
         "context-budget": cmd_context_budget(),
+        "config-health": cmd_config_health(skill_path),
     }
     if args.tdd:
         commands["tdd"] = cmd_tdd()
@@ -4386,7 +4423,7 @@ def scaffold(args):
 
     # 5. MCP servers + hooks
     mcp_servers = get_mcp_servers(args)
-    hooks = get_hooks(args)
+    hooks = get_hooks(args, skill_path)
 
     # 6. settings.json (hooks + behavioral settings). MCP servers live in a
     #    separate project-root .mcp.json (the team-shared, version-controlled

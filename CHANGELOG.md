@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Flagship release in development (see `docs/ROADMAP-v8.md`). Landed so far:
 
+### Added — Pillar 3: living config health
+- `audit.py --drift` — a fast, high-signal freshness scan (`drift_check()`): reports
+  only *genuine* drift (analyzer-generated `project-*.md` rules referencing files that
+  have since vanished, and stale analysis), so a freshly scaffolded project stays
+  silent. Never blocks; supports `--json`.
+- `SessionStart` hook runs the drift check automatically — rate-limited to once a day
+  (`.claude/.drift-last`), silent when healthy, and non-blocking (`|| true`).
+- `/config-health` (`cmd_config_health`) — on-demand drift report with fix guidance.
+
 ### Added — Pillar 4: semantic codebase analysis
 - `/semantic-analyze` workflow (`get_workflows`) — hybrid analysis: runs the cheap
   `analyze.py` regex pass for structural signals, then fans out one agent per

@@ -28,6 +28,7 @@ from audit import (
     check_skills_content,
     check_staleness,
     check_stale_analyzer_rules,
+    drift_check,
     check_total_budget,
     count_lines,
     estimate_tokens,
@@ -1085,6 +1086,37 @@ class TestEventSystemAudit(unittest.TestCase):
         messages = [i["message"] for i in result.issues]
         # Should have event-related warnings from the audit pipeline
         self.assertTrue(any("event" in m.lower() for m in messages))
+
+
+class TestDriftCheck(unittest.TestCase):
+    """Living-health drift check — high signal, low noise."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.rules_dir = self.tmpdir / ".claude" / "rules"
+        self.rules_dir.mkdir(parents=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_silent_without_analyzer_rules(self):
+        # A fresh scaffold (only generic rules, no project-*.md) must not nag.
+        (self.rules_dir / "frontend.md").write_text(
+            "---\nglobs: [\"src/app/**\"]\n---\n\n- Server Components by default.\n")
+        self.assertEqual(drift_check(self.tmpdir), [])
+
+    def test_detects_vanished_analyzer_reference(self):
+        (self.rules_dir / "project-patterns.md").write_text(
+            "---\nglobs: [\"src/**\"]\n---\n\n- Use `src/lib/gone.ts`\n")
+        issues = drift_check(self.tmpdir)
+        self.assertTrue(any("no longer exists" in i["message"] for i in issues))
+
+    def test_silent_when_analyzer_reference_exists(self):
+        (self.tmpdir / "src" / "lib").mkdir(parents=True)
+        (self.tmpdir / "src" / "lib" / "errors.ts").write_text("export class AppError {}")
+        (self.rules_dir / "project-patterns.md").write_text(
+            "---\nglobs: [\"src/**\"]\n---\n\n- Errors in `src/lib/errors.ts`\n")
+        self.assertEqual(drift_check(self.tmpdir), [])
 
 
 if __name__ == "__main__":
