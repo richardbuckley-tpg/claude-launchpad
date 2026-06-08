@@ -767,7 +767,7 @@ class TestScaffoldEndToEnd(unittest.TestCase):
         self.assertTrue(config_path.exists())
         data = json.loads(config_path.read_text())
         self.assertEqual(data["project_name"], "test-app")
-        self.assertEqual(data["version"], "7.0.0")
+        self.assertEqual(data["version"], "8.0.0")
         self.assertIn("scaffolded_at", data)
 
 
@@ -1357,7 +1357,7 @@ class TestScaffoldWithAgentsAndRules(unittest.TestCase):
         self.assertEqual(data["orm"], "prisma")
         self.assertEqual(data["ci_cd"], "github-actions")
         self.assertEqual(data["dev_cmd"], "npm run dev")
-        self.assertEqual(data["version"], "7.0.0")
+        self.assertEqual(data["version"], "8.0.0")
 
 
 class TestDomainAuditorAgents(unittest.TestCase):

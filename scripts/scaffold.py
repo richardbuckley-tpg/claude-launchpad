@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-claude-launchpad scaffold script v7.0.0
+claude-launchpad scaffold script v8.0.0
 
 Creates the .claude/ configuration directory with agents, rules, hooks, skills,
 commands, and supporting files — all with real values from the interview.
@@ -18,7 +18,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "7.0.0"
+VERSION = "8.0.0"
 
 PROJECT_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*$')
 

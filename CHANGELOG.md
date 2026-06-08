@@ -5,9 +5,11 @@ All notable changes to Claude Launchpad are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — v8 (in progress)
+## [8.0.0] - 2026-06-08
 
-Flagship release in development (see `docs/ROADMAP-v8.md`). Landed so far:
+Flagship release (see `docs/ROADMAP-v8.md`) — four pillars that turn Launchpad from
+a static `.claude/` generator into a self-maintaining, natively-orchestrated dev
+system you can install in two commands.
 
 ### Added — Pillar 3: living config health
 - `audit.py --drift` — a fast, high-signal freshness scan (`drift_check()`): reports
@@ -115,4 +117,5 @@ Prior major release (see `git log` for exact commit history). Highlights:
 - Event-driven system support (Kafka, BullMQ, RabbitMQ, Celery, Temporal, NATS, …).
 - Enhanced auto-detection, monorepo support, AI-config migration, and dependency drift.
 
+[8.0.0]: https://github.com/richardbuckley-tpg/claude-launchpad/releases/tag/v8.0.0
 [7.0.0]: https://github.com/richardbuckley-tpg/claude-launchpad/releases/tag/v7.0.0
