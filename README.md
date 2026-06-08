@@ -362,6 +362,8 @@ cd scripts/
 python -m pytest test_scaffold.py test_audit.py test_analyze.py test_learn.py -v
 ```
 
+See [CHANGELOG.md](CHANGELOG.md) for release history.
+
 ## License
 
 MIT
