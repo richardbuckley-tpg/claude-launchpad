@@ -17,7 +17,7 @@ Most Claude Code setup tools give you the same generic agents, commands, and rul
 | **Deep review** | None | 7-phase codebase assessment: architecture, security, testing, debt, recommendations |
 | **Build pipeline** | Manual steps | `/build` orchestrates agents with worktree isolation, parallel execution, state tracking |
 
-No external dependencies. Python 3.10+ stdlib only. 588 tests.
+No external dependencies. Python 3.10+ stdlib only. 628 tests.
 
 ---
 
@@ -57,12 +57,12 @@ Launchpad asks about your stack, then generates everything. Or skip the intervie
 
 | What | Count | Purpose |
 |------|-------|---------|
-| **Agents** | 10-15 | Specialized AI teammates — architect, tester, reviewer, refactorer, docs-generator, and more |
-| **Slash Commands** | 15-20 | `/build`, `/learn`, `/evolve`, `/audit`, `/debt`, `/decision`, `/deep-review`, and more |
+| **Agents** | 11-16 | Specialized AI teammates — architect, tester, reviewer, performance-optimizer, and more |
+| **Slash Commands** | 17-22 | `/build`, `/learn`, `/evolve`, `/audit`, `/quality-gate`, `/context-budget`, `/deep-review`, and more |
 | **Rules** | 2-5 | Path-scoped conventions from your actual code patterns |
-| **Skills** | 8-13 | Code generation templates for your specific stack + domain knowledge |
+| **Skills** | 9-14 | Code generation templates + research-first workflow, as `skills/<name>/SKILL.md` (Agent Skills standard) |
 | **Hooks** | 4-6 | Auto-lint on save, auto-test (TDD), force-push block, secret detection |
-| **MCP Servers** | 1-3 | GitHub, database, docs — configured with `${ENV_VAR}` references |
+| **MCP Servers** | 1-3 | GitHub & Sentry (official remote HTTP), Postgres, docs — written to `.mcp.json` with `${ENV_VAR}` references |
 | **CI/CD** | 1 | GitHub Actions or GitLab CI with your actual commands |
 | **CLAUDE.md** | 1 | Lean project context (commands, stack, mistakes to avoid) |
 | **ARCHITECTURE.md** | 1 | System diagram, key decisions, real patterns from deep analysis |
@@ -88,6 +88,7 @@ Launchpad asks about your stack, then generates everything. Or skip the intervie
 
 | Agent | When |
 |-------|------|
+| `@performance-optimizer` | Frontend or backend exists (web vitals, N+1 queries, memory, bundle size) |
 | `@security` | Auth, payments, or AI involved |
 | `@reliability-auditor` | Event systems (Kafka, BullMQ, etc.) detected |
 | `@compliance-auditor` | Domain or compliance requirements set |
@@ -98,7 +99,7 @@ Launchpad asks about your stack, then generates everything. Or skip the intervie
 
 | Command | What it does |
 |---------|-------------|
-| `/build <feature>` | Full pipeline: PRD → design → test → implement → audit → review → pre-push → ship |
+| `/build <feature>` | Full pipeline: PRD → design → test → implement → cleanup → audit → review → pre-push → ship |
 | `/idea-to-prd <idea>` | Research an idea, generate a PRD, feed it to `/build` |
 | `/deep-review` | 7-phase codebase assessment → `docs/project-review.md` with health score |
 | `/learn <correction>` | Teach Claude a project-specific rule that persists |
@@ -114,6 +115,8 @@ Launchpad asks about your stack, then generates everything. Or skip the intervie
 | `/debt` | Scan for TODO/FIXME/HACK, track debt trends over time |
 | `/decision <title>` | Record an architecture decision (ADR) in `docs/decisions/` |
 | `/resume-build` | Resume an interrupted `/build` pipeline from last completed stage |
+| `/quality-gate` | On-demand lint + type-check + test + build + security scan with pass/fail verdict |
+| `/context-budget` | Audit what's consuming the context window — find and trim token hogs |
 | `/cloud-fix` | Fix CI failures or review comments on current PR |
 | `/tdd <feature>` | Red-green-refactor cycle (when `--tdd` is set) |
 | `/setup-teams` | Enable Agent Teams for parallel multi-agent workflows (experimental) |
@@ -133,9 +136,10 @@ Say `/build <feature>` and agents run with worktree isolation and parallel execu
   2. @architect designs → writes blueprint to docs/blueprints/
   3. @security + @testing run IN PARALLEL (TDD mode)
   4. Implement until tests pass
-  5. @compliance-auditor + @reviewer run IN PARALLEL (when domain set)
-  6. @pre-push full pre-flight (lint, test, build, secrets, debug code)
-  7. @push creates the PR, cleans up worktree
+  5. Cleanup — remove dead code, debug artifacts, test slop
+  6. @compliance-auditor + @reviewer run IN PARALLEL (when domain set)
+  7. @pre-push full pre-flight (lint, test, build, secrets, debug code)
+  8. @push creates the PR, cleans up worktree
 ```
 
 The blueprint is the shared context. Worktree isolation keeps your main directory clean — if the build fails, nothing to undo. Pipeline state is tracked in `.claude/pipeline-state.json` — if interrupted, `/resume-build` picks up where you left off.
@@ -276,7 +280,7 @@ Compliance frameworks (GDPR, SOX, HIPAA, PCI-DSS) can be combined. A UK fintech 
 | **Hosting** | Vercel, Railway, AWS, Fly.io, self-hosted |
 | **CI/CD** | GitHub Actions, GitLab CI |
 | **Events** | Kafka, BullMQ, RabbitMQ, Celery, NATS, Redis Streams, Temporal |
-| **MCP** | GitHub, GitLab, PostgreSQL, SQLite, Filesystem, Sentry, Context7 |
+| **MCP** | GitHub (remote), GitLab, PostgreSQL (Postgres MCP Pro), Filesystem, Sentry (remote), Context7 |
 
 ---
 
@@ -353,7 +357,7 @@ python scripts/audit.py /path/to/project --json         # JSON output
 ## Development
 
 ```bash
-# Run all tests (588 tests, stdlib only)
+# Run all tests (628 tests, stdlib only)
 cd scripts/
 python -m pytest test_scaffold.py test_audit.py test_analyze.py test_learn.py -v
 ```

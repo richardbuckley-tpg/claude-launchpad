@@ -1,6 +1,6 @@
 {
   "name": "claude-launchpad",
-  "version": "6.0.0",
+  "version": "7.0.0",
   "description": "Claude Code bootstrapper with codebase analysis, learning system, and agent orchestration",
   "author": "claude-launchpad contributors",
   "license": "MIT",

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-claude-launchpad scaffold script v6.0.0
+claude-launchpad scaffold script v7.0.0
 
 Creates the .claude/ configuration directory with agents, rules, hooks, skills,
 commands, and supporting files — all with real values from the interview.
@@ -18,7 +18,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "6.0.0"
+VERSION = "7.0.0"
 
 PROJECT_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*$')
 
@@ -41,23 +41,58 @@ SAFE_CMD_PATTERN = re.compile(
 )
 
 
-# Pinned MCP package versions (update periodically)
-MCP_VERSIONS = {
-    "server-github": "@modelcontextprotocol/server-github@2025.1.1",
-    "server-gitlab": "@modelcontextprotocol/server-gitlab@2025.1.1",
-    "server-postgres": "@modelcontextprotocol/server-postgres@2025.1.1",
-    "server-sqlite": "@modelcontextprotocol/server-sqlite@2025.1.1",
-    "server-filesystem": "@modelcontextprotocol/server-filesystem@2025.1.1",
-    "server-sentry": "@modelcontextprotocol/server-sentry@2025.1.1",
-    "context7": "context7-mcp@1.0.6",
-    "sequential-thinking": "@anthropic/sequential-thinking-mcp@1.0.0",
+# MCP server packages (verified maintained, as of 2026-06).
+# We deliberately do NOT pin versions — npx/uvx resolve the latest published
+# release, and fabricated pins were a prior bug. Deprecated reference servers
+# (@modelcontextprotocol/server-github, server-postgres, server-sqlite) have
+# been replaced with their maintained successors or official remote servers.
+MCP_PACKAGES = {
+    "gitlab": "@zereight/mcp-gitlab",                          # community, maintained
+    "filesystem": "@modelcontextprotocol/server-filesystem",   # reference, maintained
+    "sequential-thinking": "@modelcontextprotocol/server-sequential-thinking",
+    "context7": "@upstash/context7-mcp",                       # correct package name
+    "postgres": "crystaldba/postgres-mcp",                     # Docker image (Postgres MCP Pro)
+}
+
+# Official remote (HTTP) MCP servers — no local install, OAuth/PAT auth.
+MCP_REMOTE = {
+    "github": "https://api.githubcopilot.com/mcp/",  # github/github-mcp-server hosted
+    "sentry": "https://mcp.sentry.dev/mcp",          # getsentry/sentry-mcp hosted
 }
 
 # Estimated tokens per MCP server in context window (tool descriptions + overhead)
 MCP_CONTEXT_COST = 3000  # ~3,000 tokens per active MCP server
 
-# Valid top-level keys in settings.json
-VALID_SETTINGS_KEYS = {"hooks", "mcpServers", "permissions", "env", "model", "apiKey"}
+# Valid top-level keys in settings.json (current schema, 2026-06). Kept broad so
+# the auditor doesn't false-flag modern, hand-authored configs. `mcpServers` and
+# `apiKey` are tolerated for legacy/local setups though we no longer generate them.
+VALID_SETTINGS_KEYS = {
+    "agent", "allowAllClaudeAiMcps", "allowedChannelPlugins", "allowedHttpHookUrls",
+    "allowedMcpServers", "allowManagedHooksOnly", "allowManagedMcpServersOnly",
+    "allowManagedPermissionRulesOnly", "alwaysThinkingEnabled", "apiKey", "apiKeyHelper",
+    "attribution", "autoMemoryDirectory", "autoMemoryEnabled", "autoMode", "autoScrollEnabled",
+    "autoUpdatesChannel", "availableModels", "awaySummaryEnabled", "awsAuthRefresh",
+    "awsCredentialExport", "blockedMarketplaces", "channelsEnabled", "claudeMd",
+    "claudeMdExcludes", "cleanupPeriodDays", "companyAnnouncements", "defaultShell",
+    "deniedMcpServers", "disableAgentView", "disableAllHooks", "disableAutoMode",
+    "disableDeepLinkRegistration", "disabledMcpjsonServers", "disableRemoteControl",
+    "disableSkillShellExecution", "disableWorkflows", "editorMode", "effortLevel",
+    "enableAllProjectMcpServers", "enabledMcpjsonServers", "env", "fallbackModel",
+    "fastModePerSessionOptIn", "feedbackSurveyRate", "fileSuggestion", "forceLoginMethod",
+    "forceLoginOrgUUID", "forceRemoteSettingsRefresh", "gcpAuthRefresh", "hooks",
+    "httpHookAllowedEnvVars", "includeCoAuthoredBy", "includeGitInstructions", "language",
+    "maxSkillDescriptionChars", "mcpServers", "minimumVersion", "model", "modelOverrides",
+    "otelHeadersHelper", "outputStyle", "parentSettingsBehavior", "permissions",
+    "plansDirectory", "pluginSuggestionMarketplaces", "pluginTrustMessage", "policyHelper",
+    "preferredNotifChannel", "prefersReducedMotion", "prUrlTemplate", "requiredMaximumVersion",
+    "requiredMinimumVersion", "respectGitignore", "showClearContextOnPlanAccept",
+    "showThinkingSummaries", "showTurnDuration", "skillListingBudgetFraction", "skillOverrides",
+    "skipWebFetchPreflight", "spinnerTipsEnabled", "spinnerTipsOverride", "spinnerVerbs",
+    "sshConfigs", "statusLine", "strictKnownMarketplaces", "strictPluginOnlyCustomization",
+    "syntaxHighlightingDisabled", "teammateMode", "terminalProgressBarEnabled", "tui",
+    "ultracode", "useAutoModeDuringPlan", "viewMode", "voice", "voiceEnabled",
+    "workflowKeywordTriggerEnabled", "wslInheritsWindowsSettings",
+}
 
 # Presets — common stack combinations
 PRESETS = {
@@ -309,15 +344,21 @@ Execute the full development pipeline with context passing through blueprints:
    - Run tests after each major piece — stay in the red→green loop
    - Once green, refactor if needed (tests protect you)
 
-{step + 3}. **Domain Audit + Review** — run these IN PARALLEL (launch both simultaneously):
+{step + 3}. **Cleanup**: Quick pass before review
+   - Remove dead code, unused imports, unreachable branches
+   - Remove debug artifacts: console.log, print(), debugger, unintentional TODO/HACK
+   - Remove over-defensive checks and test slop (commented-out tests, verbose boilerplate)
+   - Run lint + tests to confirm cleanup didn't break anything
+
+{step + 4}. **Domain Audit + Review** — run these IN PARALLEL (launch both simultaneously):
    - `@compliance-auditor Audit "$ARGUMENTS" for domain compliance`
    - `@reviewer Review all changes`
    Wait for BOTH to complete. Non-compliant findings or REQUEST_CHANGES block shipping.
 
-{step + 4}. **Pre-flight**: Run `@pre-push Run pre-push checks`
+{step + 5}. **Pre-flight**: Run `@pre-push Run pre-push checks`
    - Must be READY before shipping — fix any failures first
 
-{step + 5}. **Ship**: Run `@push Create PR for "$ARGUMENTS"`
+{step + 6}. **Ship**: Run `@push Create PR for "$ARGUMENTS"`
 {worktree_cleanup}{quality_report}{state_tracking}
 Update `.claude/handoff.md` after completion.
 """
@@ -351,13 +392,19 @@ Execute the full development pipeline with context passing through blueprints:
    - Run tests after each major piece — stay in the red→green loop
    - Once green, refactor if needed (tests protect you)
 
-{step + 3}. **Review**: Run `@reviewer Review all changes`
+{step + 3}. **Cleanup**: Quick pass before review
+   - Remove dead code, unused imports, unreachable branches
+   - Remove debug artifacts: console.log, print(), debugger, unintentional TODO/HACK
+   - Remove over-defensive checks and test slop (commented-out tests, verbose boilerplate)
+   - Run lint + tests to confirm cleanup didn't break anything
+
+{step + 4}. **Review**: Run `@reviewer Review all changes`
    - Must APPROVE before shipping
 
-{step + 4}. **Pre-flight**: Run `@pre-push Run pre-push checks`
+{step + 5}. **Pre-flight**: Run `@pre-push Run pre-push checks`
    - Must be READY before shipping — fix any failures first
 
-{step + 5}. **Ship**: Run `@push Create PR for "$ARGUMENTS"`
+{step + 6}. **Ship**: Run `@push Create PR for "$ARGUMENTS"`
 {worktree_cleanup}{quality_report}{state_tracking}
 Update `.claude/handoff.md` after completion.
 """
@@ -387,18 +434,24 @@ Execute the full development pipeline with context passing through blueprints:
    - Follow existing patterns (check `.claude/rules/`)
    - Create all layers: data model, API, UI, types
 
-{step + 3}. **Testing + Domain Audit** — run these IN PARALLEL (launch both simultaneously):
+{step + 3}. **Cleanup**: Quick pass before review
+   - Remove dead code, unused imports, unreachable branches
+   - Remove debug artifacts: console.log, print(), debugger, unintentional TODO/HACK
+   - Remove over-defensive checks and test slop (commented-out tests, verbose boilerplate)
+   - Run lint + tests to confirm cleanup didn't break anything
+
+{step + 4}. **Testing + Domain Audit** — run these IN PARALLEL (launch both simultaneously):
    - `@testing Write tests for "$ARGUMENTS"` — tests must pass
    - `@compliance-auditor Audit "$ARGUMENTS" for domain compliance` — must be compliant
    Wait for BOTH to complete. Test failures or non-compliant findings block shipping.
 
-{step + 4}. **Review**: Run `@reviewer Review all changes`
+{step + 5}. **Review**: Run `@reviewer Review all changes`
    - Must APPROVE before shipping
 
-{step + 5}. **Pre-flight**: Run `@pre-push Run pre-push checks`
+{step + 6}. **Pre-flight**: Run `@pre-push Run pre-push checks`
    - Must be READY before shipping — fix any failures first
 
-{step + 6}. **Ship**: Run `@push Create PR for "$ARGUMENTS"`
+{step + 7}. **Ship**: Run `@push Create PR for "$ARGUMENTS"`
 {worktree_cleanup}{quality_report}{state_tracking}
 Update `.claude/handoff.md` after completion.
 """
@@ -427,17 +480,23 @@ Execute the full development pipeline with context passing through blueprints:
    - Follow existing patterns (check `.claude/rules/`)
    - Create all layers: data model, API, UI, types
 
-{step + 3}. **Test**: Run `@testing Write tests for "$ARGUMENTS"`
+{step + 3}. **Cleanup**: Quick pass before review
+   - Remove dead code, unused imports, unreachable branches
+   - Remove debug artifacts: console.log, print(), debugger, unintentional TODO/HACK
+   - Remove over-defensive checks and test slop (commented-out tests, verbose boilerplate)
+   - Run lint + tests to confirm cleanup didn't break anything
+
+{step + 4}. **Test**: Run `@testing Write tests for "$ARGUMENTS"`
    - Tests are based on the blueprint, not the implementation
    - Must pass before continuing
 
-{step + 4}. **Review**: Run `@reviewer Review all changes`
+{step + 5}. **Review**: Run `@reviewer Review all changes`
    - Must APPROVE before shipping
 
-{step + 5}. **Pre-flight**: Run `@pre-push Run pre-push checks`
+{step + 6}. **Pre-flight**: Run `@pre-push Run pre-push checks`
    - Must be READY before shipping — fix any failures first
 
-{step + 6}. **Ship**: Run `@push Create PR for "$ARGUMENTS"`
+{step + 7}. **Ship**: Run `@push Create PR for "$ARGUMENTS"`
 {worktree_cleanup}{quality_report}{state_tracking}
 Update `.claude/handoff.md` after completion.
 """
@@ -907,7 +966,85 @@ Resume interrupted build pipeline:
 """
 
 
+def cmd_quality_gate():
+    return """---
+description: Run all quality checks and produce a structured pass/fail gate report
+---
+
+Run the full quality gate — report ALL results, don't stop at first failure:
+
+| Check | Command | Status |
+|-------|---------|--------|
+
+1. **Lint**: Run the project lint command → PASS / FAIL (with error count)
+2. **Type check**: Run type checker (tsc --noEmit, mypy, etc.) → PASS / FAIL
+3. **Tests**: Run full test suite → PASS / FAIL (X passed, Y failed)
+4. **Build**: Run build command → PASS / FAIL
+5. **Security scan**: `npm audit` / `pip audit` / equivalent → PASS / WARN (N vulnerabilities)
+6. **Debug code**: Scan for console.log, debugger, print(), TODO, FIXME, XXX → CLEAN / WARN (N items)
+7. **Secrets**: Scan staged/modified files for API keys, tokens, passwords → CLEAN / FAIL
+
+**Result**: Gate PASSES if checks 1-4 are PASS and check 7 is CLEAN.
+Warnings (5, 6) don't block but are reported.
+
+Output the table with pass/fail per check, total time, and a final **GATE: PASS / FAIL** verdict.
+If FAIL, list the specific failures with fix suggestions.
+"""
+
+
+def cmd_context_budget():
+    return """---
+description: Audit what's consuming the context window and suggest optimizations
+---
+
+Analyze the `.claude/` configuration for token consumption:
+
+1. **Measure each file**:
+   - CLAUDE.md: count lines → estimate tokens (lines × 4)
+   - Each agent in `.claude/agents/`: lines and estimated tokens
+   - Each rule in `.claude/rules/`: lines and estimated tokens
+   - Each skill in `.claude/skills/`: lines and estimated tokens
+   - Each command in `.claude/commands/`: lines and estimated tokens
+
+2. **Summarize**:
+   ```
+   Context Budget Report
+   ─────────────────────
+   CLAUDE.md              XX lines  ~XXX tokens
+   Agents (N)            XXX lines  ~XXX tokens
+   Rules (N)              XX lines  ~XXX tokens
+   Skills (N)            XXX lines  ~XXX tokens
+   Commands (N)          XXX lines  ~XXX tokens
+   ─────────────────────
+   Total                 XXX lines  ~XXX tokens  (~X% of 200k context)
+   ```
+
+3. **Flag issues**:
+   - Any single agent >30 lines → "Over budget — trim to ≤30 lines"
+   - Any rule >20 lines → "Over budget — trim to ≤20 lines"
+   - Any skill >40 lines → "Over budget — trim to ≤40 lines"
+   - CLAUDE.md >100 lines → "Over budget — trim to ≤100 lines"
+   - Total >2000 tokens → "Heavy config — consider trimming"
+
+4. **Recommend**: Identify the top 3 token consumers and suggest specific trims.
+"""
+
+
 # ── Skills ───────────────────────────────────────────────────────────────
+
+def _ensure_frontmatter_name(name: str, content: str) -> str:
+    """Insert a `name:` field into a skill's YAML frontmatter if absent.
+
+    The Agent Skills standard expects a `name:` field; older content only had
+    `description:`. Idempotent — leaves content untouched if `name:` is present.
+    """
+    if not content.startswith("---\n"):
+        return content
+    head = content[4:].split("---", 1)[0]
+    if re.search(r'^name:', head, re.M):
+        return content
+    return content.replace("---\n", f"---\nname: {name}\n", 1)
+
 
 def get_skills(args):
     """Return list of (name, content) tuples for skills based on interview answers."""
@@ -1506,6 +1643,41 @@ description: PCI-DSS compliance rules for code review and architecture decisions
 Use /learn to add project-specific PCI-DSS rules.
 """))
 
+    # Always generated — research before building
+    pkg_mgr = "npm/PyPI" if be in ("python-fastapi", "python-django") else "npm"
+    if be in ("go",):
+        pkg_mgr = "Go modules"
+    elif be in ("ruby-rails",):
+        pkg_mgr = "RubyGems"
+    elif be in ("rust-actix",):
+        pkg_mgr = "crates.io"
+
+    skills.append(("search-first", f"""---
+description: Research existing solutions before writing new code — avoid reinventing the wheel
+---
+
+Before building $ARGUMENTS, research first:
+
+1. **Existing code**: Search this project — is it already solved? (`Grep`, `Glob`)
+2. **Packages**: Search {pkg_mgr} for maintained libraries that solve this
+3. **Project patterns**: Does ARCHITECTURE.md or `.claude/rules/` suggest how to approach this?
+4. **MCP servers**: Could an MCP integration solve this without custom code?
+
+Decision matrix:
+- **Adopt**: Well-maintained package exists with >10k weekly downloads → use it
+- **Extend**: Partial solution exists in the codebase → extend it
+- **Compose**: Multiple small packages can be combined → compose them
+- **Build**: Nothing fits or integration cost exceeds build cost → build it
+
+Output: recommendation (adopt/extend/compose/build) with rationale, specific package names or code locations, and estimated effort for each option.
+
+Anti-patterns: Don't build what you can install. Don't install unmaintained packages (<100 weekly downloads, no updates in 2 years). Don't add a dependency for trivial code (<20 lines).
+
+Verify: Decision documented. If adopting a package, check license compatibility and bundle size impact.
+"""))
+
+    # Agent Skills standard: every SKILL.md carries a `name:` field in frontmatter.
+    skills = [(name, _ensure_frontmatter_name(name, content)) for name, content in skills]
     return skills
 
 
@@ -1517,38 +1689,42 @@ def get_mcp_servers(args):
 
     git = args.git_platform or "none"
 
-    # GitHub MCP — most common, high value
+    # GitHub MCP — official hosted remote server (HTTP). The old
+    # @modelcontextprotocol/server-github npm package is deprecated.
     if git == "github":
         servers["github"] = {
-            "command": "npx",
-            "args": ["-y", MCP_VERSIONS["server-github"]],
-            "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"}
+            "type": "http",
+            "url": MCP_REMOTE["github"],
+            "headers": {"Authorization": "Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"},
         }
 
-    # GitLab MCP
+    # GitLab MCP — community-maintained stdio server.
     if git == "gitlab":
         servers["gitlab"] = {
             "command": "npx",
-            "args": ["-y", MCP_VERSIONS["server-gitlab"]],
+            "args": ["-y", MCP_PACKAGES["gitlab"]],
             "env": {
-                "GITLAB_PERSONAL_ACCESS_TOKEN": "${GITLAB_TOKEN}",
+                "GITLAB_PERSONAL_ACCESS_TOKEN": "${GITLAB_PERSONAL_ACCESS_TOKEN}",
                 "GITLAB_API_URL": "https://gitlab.com/api/v4"
             }
         }
 
-    # Database MCP servers
+    # PostgreSQL MCP — Postgres MCP Pro (crystaldba), the maintained successor to
+    # the deprecated reference server. Runs via Docker in restricted (read-only)
+    # access mode by default; switch to --access-mode=unrestricted only in dev.
     db = args.database or "none"
-    if db in ("postgresql", "sqlite"):
-        pkg = MCP_VERSIONS["server-postgres"] if db == "postgresql" else MCP_VERSIONS["server-sqlite"]
-        servers["database"] = {
-            "command": "npx",
-            "args": ["-y", pkg],
-            "env": {"DATABASE_URL": "${DATABASE_URL}"} if db != "sqlite" else {}
+    if db == "postgresql":
+        servers["postgres"] = {
+            "command": "docker",
+            "args": ["run", "-i", "--rm", "-e", "DATABASE_URI",
+                     MCP_PACKAGES["postgres"], "--access-mode=restricted"],
+            "env": {"DATABASE_URI": "${DATABASE_URL}"}
         }
-    # Note: MySQL MCP not included — no verified official package yet
+    # SQLite MCP intentionally omitted: the reference server is archived with a
+    # known SQL-injection issue and there is no clear maintained replacement.
+    # MySQL likewise has no verified official package.
 
-    # Filesystem MCP — useful for docs-heavy projects
-    # Only add if docs/ or specs/ directories actually exist (checked at generation time)
+    # Filesystem MCP — maintained reference server. Useful for docs-heavy teams.
     if args.team:
         output_dir = Path(args.output_dir).resolve()
         project_dir = output_dir / args.project_name if args.create_root else output_dir
@@ -1560,15 +1736,14 @@ def get_mcp_servers(args):
             fs_paths = ["./docs"]  # Default — will be created by scaffold
         servers["filesystem"] = {
             "command": "npx",
-            "args": ["-y", MCP_VERSIONS["server-filesystem"]] + fs_paths
+            "args": ["-y", MCP_PACKAGES["filesystem"]] + fs_paths
         }
 
-    # Sentry MCP — if user specified sentry in their monitoring
+    # Sentry MCP — official hosted remote server (HTTP, OAuth on connect).
     if getattr(args, 'sentry', False):
         servers["sentry"] = {
-            "command": "npx",
-            "args": ["-y", MCP_VERSIONS["server-sentry"]],
-            "env": {"SENTRY_AUTH_TOKEN": "${SENTRY_AUTH_TOKEN}"}
+            "type": "http",
+            "url": MCP_REMOTE["sentry"],
         }
 
     # Community MCP servers (skip in minimal mode)
@@ -1578,14 +1753,14 @@ def get_mcp_servers(args):
         if getattr(args, 'context7', False):
             servers["context7"] = {
                 "command": "npx",
-                "args": ["-y", MCP_VERSIONS["context7"]]
+                "args": ["-y", MCP_PACKAGES["context7"]]
             }
 
         # Sequential Thinking — for complex architectural decisions
         if getattr(args, 'sequential_thinking', False):
             servers["sequential-thinking"] = {
                 "command": "npx",
-                "args": ["-y", MCP_VERSIONS["sequential-thinking"]]
+                "args": ["-y", MCP_PACKAGES["sequential-thinking"]]
             }
 
     return servers
@@ -1730,7 +1905,52 @@ def get_hooks(args):
     else:
         hooks["PostToolUse"] = [dep_watch_hook]
 
+    # Agent Teams quality gates (experimental). These events only fire in a team
+    # session, so they're inert in normal single-session use.
+    if getattr(args, 'agent_teams', False):
+        hooks["TaskCompleted"] = [{
+            "hooks": [{
+                "type": "command",
+                "command": "echo 'Task complete — run /pre-push (lint, test, build, secrets) before shipping.' >&2"
+            }]
+        }]
+        hooks["TeammateIdle"] = [{
+            "hooks": [{
+                "type": "command",
+                "command": "echo 'Teammate idle — check the shared task list for unclaimed work.' >&2"
+            }]
+        }]
+
     return hooks
+
+
+def get_settings(args, hooks):
+    """Build settings.json content (hooks + behavioral settings).
+
+    MCP servers are NOT included here — they live in a project-root .mcp.json.
+    """
+    settings = {}
+    if hooks:
+        settings["hooks"] = hooks
+
+    # Resilience: try Sonnet if the primary model is overloaded/unavailable.
+    # (No-op when the session already runs on Sonnet.)
+    settings["fallbackModel"] = ["sonnet"]
+
+    # Status line: dir @ branch | model. Defensive — never errors, degrades
+    # gracefully without jq or git so it can't spam the terminal.
+    status_cmd = (
+        "input=$(cat); "
+        "if command -v jq >/dev/null 2>&1; then "
+        "dir=$(printf '%s' \"$input\" | jq -r '.workspace.current_dir // .cwd // \".\"' 2>/dev/null); "
+        "model=$(printf '%s' \"$input\" | jq -r '.model.display_name // \"Claude\"' 2>/dev/null); "
+        "else dir=\".\"; model=\"Claude\"; fi; "
+        "branch=$(git -C \"$dir\" rev-parse --abbrev-ref HEAD 2>/dev/null); "
+        "printf '%s%s | %s' \"$(basename \"$dir\")\" \"${branch:+ @ $branch}\" \"$model\""
+    )
+    settings["statusLine"] = {"type": "command", "command": status_cmd}
+
+    return settings
 
 
 # ── Agents ───────────────────────────────────────────────────────────────
@@ -1752,7 +1972,7 @@ description: Designs technical solutions from feature requests
 isolation: worktree
 tools: [Read, Glob, Grep, Bash, Write]
 model: opus
-effort: high
+effort: xhigh
 ---
 
 You are the principal architect for a {fe}/{be} project.
@@ -2191,6 +2411,42 @@ Rules:
 - STOP if data residency or isolation requirements are violated
 """))
 
+    # performance-optimizer — when frontend or backend exists (almost always)
+    if fe != "none" or be != "none":
+        perf_checks = []
+        if fe != "none":
+            perf_checks.append("Web Vitals (LCP, CLS, INP), bundle size, lazy loading, image optimization")
+        if be != "none":
+            perf_checks.append("N+1 queries, missing indexes, unbounded queries, connection pooling")
+        if db != "none":
+            perf_checks.append("query plans, slow query patterns, pagination")
+        checks_str = ". ".join(perf_checks)
+
+        agents.append(("performance-optimizer", f"""---
+name: performance-optimizer
+description: Profiles and optimizes performance — web vitals, queries, memory, bundle size
+tools: [Read, Glob, Grep, Bash]
+model: sonnet
+---
+
+You are a performance engineer for a {fe}/{be}/{db} stack.
+
+Analyze for:
+1. **Frontend**: Bundle size, render performance, lazy loading, image optimization, Web Vitals
+2. **Backend**: N+1 queries, missing DB indexes, unbounded results, expensive loops, connection pooling
+3. **Memory**: Leaked event listeners, unclosed connections, growing caches, large object retention
+4. **Algorithmic**: O(n²) in hot paths, unnecessary re-renders, redundant computation
+
+Checks: {checks_str}
+
+Output: prioritized list with estimated impact (HIGH/MEDIUM/LOW), current vs target metric where measurable, and specific fix.
+
+Rules:
+- Measure before optimizing — no premature optimization
+- Profile the critical path first — don't optimize cold code
+- STOP if optimization would hurt readability without measurable gain
+"""))
+
     return agents
 
 
@@ -2554,7 +2810,7 @@ def get_claudeignore(frontend, backend):
     return "\n".join(lines) + "\n"
 
 
-def get_env_example(database, auth, ai):
+def get_env_example(database, auth, ai, git_platform="none"):
     """Generate .env.example."""
     lines = ["# Environment Variables", "# Copy to .env and fill in values", ""]
 
@@ -2580,12 +2836,18 @@ def get_env_example(database, auth, ai):
     if ai:
         lines.extend(["", "ANTHROPIC_API_KEY=sk-ant-...", "# OPENAI_API_KEY=sk-..."])
 
-    # MCP-related env vars
-    mcp_vars = []
-    if database in ("postgresql", "mysql"):
-        pass  # DATABASE_URL already added above
-    if auth == "none":
-        pass  # No additional env vars
+    # MCP-related secrets (referenced by .mcp.json via ${VAR} expansion).
+    # DATABASE_URL (Postgres MCP) is already added above when applicable.
+    mcp_lines = []
+    if git_platform == "github":
+        mcp_lines.append("# GitHub MCP server (https://api.githubcopilot.com/mcp/)")
+        mcp_lines.append("GITHUB_PERSONAL_ACCESS_TOKEN=ghp_...")
+    elif git_platform == "gitlab":
+        mcp_lines.append("# GitLab MCP server")
+        mcp_lines.append("GITLAB_PERSONAL_ACCESS_TOKEN=glpat-...")
+    if mcp_lines:
+        lines.append("")
+        lines.extend(mcp_lines)
 
     return "\n".join(lines) + "\n"
 
@@ -3305,6 +3567,7 @@ def safe_write(filepath: Path, content: str, force: bool = False, update: bool =
     if dry_run:
         return "overwritten" if existed else "created"
     try:
+        filepath.parent.mkdir(parents=True, exist_ok=True)
         filepath.write_text(content)
     except OSError as e:
         print(f"  ✗ Failed to write {filepath.name}: {e}", file=sys.stderr)
@@ -3361,9 +3624,13 @@ def validate_settings(settings: dict) -> list[str]:
     # Validate hooks structure
     hooks = settings.get("hooks", {})
     valid_hook_types = {
-        "PreToolUse", "PostToolUse", "Stop", "Notification",
-        "SessionStart", "SubagentStop", "PreCompact",
-        "WorktreeCreate", "WorktreeRemove",
+        "SessionStart", "Setup", "UserPromptSubmit", "UserPromptExpansion",
+        "PreToolUse", "PermissionRequest", "PermissionDenied", "PostToolUse",
+        "PostToolUseFailure", "PostToolBatch", "Notification", "MessageDisplay",
+        "SubagentStart", "SubagentStop", "TaskCreated", "TaskCompleted", "Stop",
+        "StopFailure", "TeammateIdle", "InstructionsLoaded", "ConfigChange",
+        "CwdChanged", "FileChanged", "WorktreeCreate", "WorktreeRemove",
+        "PreCompact", "PostCompact", "Elicitation", "ElicitationResult", "SessionEnd",
     }
     for hook_type in hooks:
         if hook_type not in valid_hook_types:
@@ -3378,14 +3645,15 @@ def validate_settings(settings: dict) -> list[str]:
             if "hooks" not in entry:
                 warnings.append(f"hooks.{hook_type}[{i}] missing 'hooks' array")
 
-    # Validate MCP servers structure
+    # Validate MCP servers structure. A server is either stdio (has `command`)
+    # or remote (type http/sse/ws, has `url`).
     mcp = settings.get("mcpServers", {})
     for name, config in mcp.items():
         if not isinstance(config, dict):
             warnings.append(f"mcpServers.{name} should be an object")
             continue
-        if "command" not in config:
-            warnings.append(f"mcpServers.{name} missing 'command'")
+        if "command" not in config and "url" not in config:
+            warnings.append(f"mcpServers.{name} missing 'command' or 'url'")
 
     return warnings
 
@@ -3404,20 +3672,29 @@ def verify_scaffold(project_dir: Path, args) -> list[str]:
     settings_path = project_dir / ".claude" / "settings.json"
     if settings_path.exists():
         try:
-            data = json.loads(settings_path.read_text())
-            # Check MCP servers have env vars documented
+            json.loads(settings_path.read_text())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            issues.append("settings.json is not valid JSON")
+
+    # Check .mcp.json is valid and its referenced secrets are documented
+    mcp_path = project_dir / ".mcp.json"
+    if mcp_path.exists():
+        try:
+            data = json.loads(mcp_path.read_text())
             mcp = data.get("mcpServers", {})
             env_example = project_dir / ".env.example"
             if env_example.exists():
                 env_content = env_example.read_text()
                 for name, config in mcp.items():
-                    for env_key, env_val in config.get("env", {}).items():
-                        if env_val.startswith("${"):
-                            var_name = env_val.strip("${}")
+                    # MCP secrets can appear in env values or HTTP header values.
+                    refs = list(config.get("env", {}).values())
+                    refs += list(config.get("headers", {}).values())
+                    for val in refs:
+                        for var_name in re.findall(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}', val):
                             if var_name not in env_content:
                                 issues.append(f"MCP '{name}' needs {var_name} but it's not in .env.example")
         except (json.JSONDecodeError, UnicodeDecodeError):
-            issues.append("settings.json is not valid JSON")
+            issues.append(".mcp.json is not valid JSON")
 
     # Check CLAUDE.md and ARCHITECTURE.md exist
     for name in ["CLAUDE.md", "ARCHITECTURE.md"]:
@@ -3529,6 +3806,8 @@ def scaffold(args):
         "debt": cmd_debt(), "decision": cmd_decision(),
         "resume-build": cmd_resume_build(),
         "deep-review": cmd_deep_review(skill_path),
+        "quality-gate": cmd_quality_gate(),
+        "context-budget": cmd_context_budget(),
     }
     if args.tdd:
         commands["tdd"] = cmd_tdd()
@@ -3567,13 +3846,14 @@ def scaffold(args):
     skills = get_skills(args)
     created_skills, skipped_skills = 0, 0
     for name, content in skills:
-        fp = skills_dir / f"{name}.md"
+        # Agent Skills standard: each skill is a directory containing SKILL.md.
+        fp = skills_dir / name / "SKILL.md"
         result = safe_write(fp, content, force, dry_run=dry_run)
         if result == "skipped":
             skipped_skills += 1
         else:
             created_skills += 1
-            created_files.append(f".claude/skills/{name}.md")
+            created_files.append(f".claude/skills/{name}/SKILL.md")
     msg = f"  Created {created_skills} skills"
     if skipped_skills:
         msg += f" (skipped {skipped_skills} existing)"
@@ -3616,7 +3896,7 @@ def scaffold(args):
     # 6. Supporting files
     support_files = [
         ("claudeignore", ".claudeignore", get_claudeignore(args.frontend, args.backend)),
-        ("env.example", ".env.example", get_env_example(args.database, args.auth or "none", args.ai)),
+        ("env.example", ".env.example", get_env_example(args.database, args.auth or "none", args.ai, args.git_platform or "none")),
         ("handoff.md", ".claude/handoff.md", get_handoff(args.project_name)),
         ("first-feature.md", "docs/first-feature.md", get_first_feature_guide(args)),
         ("blueprint-template.md", "docs/blueprints/.template.md", get_blueprint_template()),
@@ -3656,12 +3936,10 @@ def scaffold(args):
     mcp_servers = get_mcp_servers(args)
     hooks = get_hooks(args)
 
-    # 6. settings.json with hooks + MCP
-    settings = {}
-    if hooks:
-        settings["hooks"] = hooks
-    if mcp_servers:
-        settings["mcpServers"] = mcp_servers
+    # 6. settings.json (hooks + behavioral settings). MCP servers live in a
+    #    separate project-root .mcp.json (the team-shared, version-controlled
+    #    convention), not in settings.json.
+    settings = get_settings(args, hooks)
     # Validate before writing
     schema_warnings = validate_settings(settings)
     for w in schema_warnings:
@@ -3669,18 +3947,10 @@ def scaffold(args):
 
     settings_path = project_dir / ".claude" / "settings.json"
     if dry_run:
-        if mcp_servers:
-            print(f"  Would configure {len(mcp_servers)} MCP servers: {', '.join(mcp_servers.keys())}")
-        else:
-            print("  No MCP servers to configure")
         created_files.append(".claude/settings.json")
     elif not settings_path.exists():
         settings_path.write_text(json.dumps(settings, indent=2) + "\n")
         created_files.append(".claude/settings.json")
-        if mcp_servers:
-            print(f"  Configured {len(mcp_servers)} MCP servers: {', '.join(mcp_servers.keys())}")
-        else:
-            print("  No MCP servers configured (add later in .claude/settings.json)")
     elif update:
         merged, changes = merge_settings(settings_path, settings)
         if changes:
@@ -3689,14 +3959,41 @@ def scaffold(args):
             for c in changes:
                 print(f"  ✓ {c}")
         else:
-            print("  settings.json already up to date (no new MCP servers to add)")
+            print("  settings.json already up to date")
     elif force:
         settings_path.write_text(json.dumps(settings, indent=2) + "\n")
         created_files.append(".claude/settings.json")
-        if mcp_servers:
-            print(f"  Configured {len(mcp_servers)} MCP servers: {', '.join(mcp_servers.keys())}")
     else:
         print("  Skipped existing settings.json (use --update to merge, --force to overwrite)")
+
+    # 6b. .mcp.json — project-scoped MCP servers (checked into version control)
+    mcp_path = project_dir / ".mcp.json"
+    mcp_config = {"mcpServers": mcp_servers}
+    if not mcp_servers:
+        if dry_run:
+            print("  No MCP servers to configure")
+    elif dry_run:
+        print(f"  Would configure {len(mcp_servers)} MCP servers: {', '.join(mcp_servers.keys())}")
+        created_files.append(".mcp.json")
+    elif not mcp_path.exists():
+        mcp_path.write_text(json.dumps(mcp_config, indent=2) + "\n")
+        created_files.append(".mcp.json")
+        print(f"  Configured {len(mcp_servers)} MCP servers in .mcp.json: {', '.join(mcp_servers.keys())}")
+    elif update:
+        merged, changes = merge_settings(mcp_path, mcp_config)
+        if changes:
+            mcp_path.write_text(json.dumps(merged, indent=2) + "\n")
+            created_files.append(".mcp.json")
+            for c in changes:
+                print(f"  ✓ {c}")
+        else:
+            print("  .mcp.json already up to date (no new MCP servers to add)")
+    elif force:
+        mcp_path.write_text(json.dumps(mcp_config, indent=2) + "\n")
+        created_files.append(".mcp.json")
+        print(f"  Configured {len(mcp_servers)} MCP servers in .mcp.json: {', '.join(mcp_servers.keys())}")
+    else:
+        print("  Skipped existing .mcp.json (use --update to merge, --force to overwrite)")
 
     # 7. Generate real CLAUDE.md and ARCHITECTURE.md with interview data
     claude_md_path = project_dir / "CLAUDE.md"

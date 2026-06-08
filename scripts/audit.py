@@ -32,6 +32,19 @@ def count_lines(filepath: Path) -> int:
         return 0
 
 
+def skill_files(skills_dir: Path) -> list:
+    """Return all skill definition files under a skills directory.
+
+    Supports both the current Agent Skills layout (`<name>/SKILL.md`) and the
+    legacy flat layout (`<name>.md`), so the auditor works on any config.
+    """
+    if not skills_dir.exists():
+        return []
+    files = sorted(skills_dir.glob("*/SKILL.md"))
+    files += sorted(f for f in skills_dir.glob("*.md") if f.is_file())
+    return files
+
+
 def estimate_tokens(lines: int) -> int:
     return lines * TOKENS_PER_LINE
 
@@ -728,18 +741,20 @@ def check_skills_content(project_dir: Path, result: AuditResult):
     if not skills_dir.exists():
         return
 
-    skill_files = list(skills_dir.glob("*.md"))
-    if not skill_files:
+    files = skill_files(skills_dir)
+    if not files:
         return
 
     total_skill_lines = 0
-    for sf in skill_files:
+    for sf in files:
         lines = count_lines(sf)
         total_skill_lines += lines
+        # Label by skill directory name when using the SKILL.md layout.
+        label = sf.parent.name if sf.name == "SKILL.md" else sf.name
         if lines > 50:
             result.add_issue("warning",
-                f"Skill {sf.name}: {lines} lines (target ≤40)",
-                f"Trim {sf.name} — skills should be concise directives",
+                f"Skill {label}: {lines} lines (target ≤40)",
+                f"Trim {label} — skills should be concise directives",
                 category="efficiency")
 
         # Check for YAML frontmatter with description
@@ -828,12 +843,12 @@ def generate_recommendations(project_dir: Path) -> list[dict]:
 
     # Check for missing skills
     skills_dir = project_dir / ".claude" / "skills"
-    if not skills_dir.exists() or not list(skills_dir.glob("*.md")):
+    if not skill_files(skills_dir):
         recommendations.append({
             "category": "skills",
             "priority": "medium",
             "message": "No custom skills — skills provide reusable task templates",
-            "action": "Create .claude/skills/ with generate-feature.md, simplify.md at minimum",
+            "action": "Create .claude/skills/<name>/SKILL.md (e.g. generate-feature, simplify)",
         })
 
     # Check for missing commands
@@ -948,17 +963,17 @@ def apply_fixes(project_dir: Path, result: AuditResult) -> list[str]:
 
     # Fix 3: Add missing YAML frontmatter to skills
     skills_dir = project_dir / ".claude" / "skills"
-    if skills_dir.exists():
-        for sf in skills_dir.glob("*.md"):
-            try:
-                content = sf.read_text()
-                if not content.startswith("---"):
-                    name = sf.stem.replace("-", " ").title()
-                    new_content = f"---\ndescription: {name}\n---\n{content}"
-                    sf.write_text(new_content)
-                    actions.append(f"Added frontmatter to skill {sf.name}")
-            except UnicodeDecodeError:
-                pass
+    for sf in skill_files(skills_dir):
+        try:
+            content = sf.read_text()
+            if not content.startswith("---"):
+                skill_name = sf.parent.name if sf.name == "SKILL.md" else sf.stem
+                title = skill_name.replace("-", " ").title()
+                new_content = f"---\nname: {skill_name}\ndescription: {title}\n---\n{content}"
+                sf.write_text(new_content)
+                actions.append(f"Added frontmatter to skill {skill_name}")
+        except UnicodeDecodeError:
+            pass
 
     # Fix 4: Add missing YAML frontmatter to commands
     commands_dir = project_dir / ".claude" / "commands"

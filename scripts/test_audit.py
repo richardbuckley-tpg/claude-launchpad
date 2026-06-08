@@ -524,6 +524,18 @@ class TestCheckSkillsContent(unittest.TestCase):
         size_warnings = [i for i in r.issues if "lines" in i["message"]]
         self.assertTrue(len(size_warnings) > 0)
 
+    def test_skill_dir_layout_oversized_warning(self):
+        """Audits the current <name>/SKILL.md layout, labeled by directory name."""
+        project_dir = make_project(self.tmpdir)
+        skills_dir = project_dir / ".claude" / "skills"
+        (skills_dir / "big-skill").mkdir(parents=True)
+        (skills_dir / "big-skill" / "SKILL.md").write_text(
+            "---\nname: big-skill\ndescription: Big\n---\n" + "line\n" * 60)
+        r = AuditResult()
+        check_skills_content(project_dir, r)
+        size_warnings = [i for i in r.issues if "big-skill" in i["message"]]
+        self.assertTrue(len(size_warnings) > 0)
+
 
 class TestCheckCommandsContent(unittest.TestCase):
     """Test commands content quality checks."""

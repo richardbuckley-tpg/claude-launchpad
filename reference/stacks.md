@@ -165,52 +165,57 @@ Quick-reference for stack-specific patterns. Read the section matching the user'
 
 ## MCP Servers
 
-MCP (Model Context Protocol) servers extend Claude Code with external tool access. Configure in `.claude/settings.json` under `mcpServers`.
+MCP (Model Context Protocol) servers extend Claude Code with external tool access. Project-scoped
+servers live in a project-root `.mcp.json` (`{"mcpServers": {...}}`) — the team-shared, version-controlled
+location — NOT in `settings.json`. Transports: stdio (`command`/`args`/`env`), remote `type: http`
+(`url`/`headers`, supports OAuth), and `type: sse`. Use `${VAR}` expansion for secrets.
 
-### GitHub MCP
-- **Package**: `@modelcontextprotocol/server-github`
-- **Env**: `GITHUB_PERSONAL_ACCESS_TOKEN` — needs `repo`, `read:org` scopes
-- **Capabilities**: Create/read issues, PRs, branches, file contents, search repos
-- **When to add**: Any project hosted on GitHub (most projects)
-- **Anti-pattern**: Don't add if project uses GitLab or Bitbucket
+> The deprecated `@modelcontextprotocol/server-github`, `server-postgres`, and `server-sqlite`
+> reference packages have been retired (moved to `servers-archived`). Use the replacements below.
+> Don't pin fabricated versions — `npx -y <pkg>` resolves the latest published release.
+
+### GitHub MCP (official remote)
+- **Config**: `{"type": "http", "url": "https://api.githubcopilot.com/mcp/", "headers": {"Authorization": "Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"}}`
+- **Env**: `GITHUB_PERSONAL_ACCESS_TOKEN` — needs `repo`, `read:org` scopes (append `/readonly` to the URL for read-only tools)
+- **Capabilities**: Issues, PRs, branches, file contents, search repos
+- **When to add**: GitHub-hosted projects. Local alternative: Docker image `ghcr.io/github/github-mcp-server`
 
 ### GitLab MCP
-- **Package**: `@modelcontextprotocol/server-gitlab`
+- **Package**: `@zereight/mcp-gitlab` (community, maintained) — `npx -y @zereight/mcp-gitlab`
 - **Env**: `GITLAB_PERSONAL_ACCESS_TOKEN`, `GITLAB_API_URL`
 - **Capabilities**: Issues, merge requests, pipelines, file operations
-- **When to add**: GitLab-hosted projects or GitLab CI users
 
-### PostgreSQL MCP
-- **Package**: `@modelcontextprotocol/server-postgres`
-- **Env**: `DATABASE_URL` — standard connection string
-- **Capabilities**: Run read-only queries, inspect schema, list tables
-- **When to add**: Projects with PostgreSQL. Great for debugging data issues
-- **Anti-pattern**: Don't use for write operations — read-only by design. Use read-only DB credentials
+### PostgreSQL MCP (Postgres MCP Pro)
+- **Package**: `crystaldba/postgres-mcp` (Docker image; PyPI `postgres-mcp`)
+- **Config**: `docker run -i --rm -e DATABASE_URI crystaldba/postgres-mcp --access-mode=restricted`
+- **Env**: `DATABASE_URI` (map from your `DATABASE_URL`)
+- **Capabilities**: Read-only queries, schema inspection, index/health analysis
+- **Anti-pattern**: Keep `--access-mode=restricted` (read-only) outside dev; use read-only DB credentials
 
 ### SQLite MCP
-- **Package**: `@modelcontextprotocol/server-sqlite`
-- **Capabilities**: Query SQLite databases, inspect schema
-- **When to add**: SQLite projects, local dev databases, Turso
+- **Status**: No MCP is generated. The reference server is archived with a known SQL-injection issue
+  and there's no clear maintained replacement. Prefer Postgres, or vet a community server (e.g. DBHub) yourself.
 
 ### Filesystem MCP
-- **Package**: `@modelcontextprotocol/server-filesystem`
+- **Package**: `@modelcontextprotocol/server-filesystem` (maintained reference server)
 - **Args**: Pass allowed directories (e.g., `./docs`, `./specs`)
-- **Capabilities**: Read/write files in allowed directories
 - **When to add**: Team projects with docs/specs outside the main codebase
 - **Anti-pattern**: Don't add root `/` — scope to specific directories
 
-### Sentry MCP
-- **Package**: `@modelcontextprotocol/server-sentry`
-- **Env**: `SENTRY_AUTH_TOKEN`
+### Sentry MCP (official remote)
+- **Config**: `{"type": "http", "url": "https://mcp.sentry.dev/mcp"}` — OAuth on first connect (no token in config)
 - **Capabilities**: Query issues, events, releases, performance data
-- **When to add**: Projects using Sentry for error monitoring
+
+### Context7 MCP
+- **Package**: `@upstash/context7-mcp` (stdio) or hosted `https://mcp.context7.com/mcp` (http)
+- **Capabilities**: Up-to-date library/framework docs lookup for any stack
 
 ### Selection Logic
 - **Always**: GitHub/GitLab MCP (match git platform)
-- **If database**: PostgreSQL/SQLite MCP for schema inspection
+- **If PostgreSQL**: Postgres MCP Pro for schema/health inspection (no SQLite MCP)
 - **If team**: Filesystem MCP for shared docs
 - **If monitoring**: Sentry MCP for error context
-- **Total**: Aim for 1-3 MCP servers. More adds startup latency
+- **Total**: Aim for 1-3 MCP servers. More adds startup latency and context cost (~3k tokens each)
 
 ## Event Brokers & Message Queues
 

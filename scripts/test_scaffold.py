@@ -17,7 +17,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from scaffold import (
     SAFE_CMD_PATTERN,
     PROJECT_NAME_PATTERN,
-    MCP_VERSIONS,
+    MCP_PACKAGES,
+    MCP_REMOTE,
     MCP_CONTEXT_COST,
     VALID_SETTINGS_KEYS,
     PRESETS,
@@ -25,6 +26,7 @@ from scaffold import (
     get_skills,
     get_mcp_servers,
     get_hooks,
+    get_settings,
     get_agents,
     get_rules,
     get_lsp_recommendations,
@@ -53,6 +55,8 @@ from scaffold import (
     cmd_build_teams,
     cmd_setup_teams,
     cmd_deep_review,
+    cmd_quality_gate,
+    cmd_context_budget,
     get_architecture_md_from_review,
 )
 
@@ -216,13 +220,20 @@ class TestSafeWrite(unittest.TestCase):
         self.assertEqual(result, "overwritten")
         self.assertEqual(fp.read_text(), "new content")
 
-    def test_handles_write_error(self):
-        # Try to write to a non-existent directory
+    def test_creates_missing_parent_dirs(self):
+        # safe_write creates parent directories (needed for skills/<name>/SKILL.md)
         fp = self.tmpdir / "nonexistent" / "dir" / "test.md"
         result = safe_write(fp, "content")
-        # Should return "skipped" since file doesn't exist and write fails
-        # Actually, it won't exist so it'll try to write and fail
-        # The file doesn't exist → existed=False → tries to write → OSError → "skipped"
+        self.assertEqual(result, "created")
+        self.assertTrue(fp.exists())
+        self.assertEqual(fp.read_text(), "content")
+
+    def test_handles_write_error(self):
+        # A genuinely unwritable path (parent is a file, not a dir) returns "skipped"
+        blocker = self.tmpdir / "blocker"
+        blocker.write_text("i am a file")
+        fp = blocker / "child" / "test.md"
+        result = safe_write(fp, "content")
         self.assertEqual(result, "skipped")
 
 
@@ -357,6 +368,14 @@ class TestGetSkills(unittest.TestCase):
             self.assertTrue(content.strip().startswith("---"),
                           f"Skill '{name}' missing YAML frontmatter")
 
+    def test_skills_have_name_field(self):
+        """Agent Skills standard: each SKILL.md carries a name: field."""
+        args = make_args(frontend="nextjs", database="postgresql", auth="clerk", ai=True)
+        skills = get_skills(args)
+        for name, content in skills:
+            self.assertIn(f"name: {name}", content,
+                          f"Skill '{name}' missing name: frontmatter field")
+
     def test_no_ai_flag_skips_ai_skills(self):
         args = make_args(ai=False)
         skills = get_skills(args)
@@ -368,46 +387,60 @@ class TestGetSkills(unittest.TestCase):
 class TestGetMcpServers(unittest.TestCase):
     """Test MCP server configuration generation."""
 
-    def test_github_platform_adds_github_mcp(self):
+    def test_github_platform_adds_github_remote_mcp(self):
         args = make_args(git_platform="github")
         servers = get_mcp_servers(args)
         self.assertIn("github", servers)
-        self.assertEqual(servers["github"]["env"]["GITHUB_PERSONAL_ACCESS_TOKEN"], "${GITHUB_TOKEN}")
+        # GitHub now uses the official hosted remote (HTTP) server, not the
+        # deprecated npm package.
+        self.assertEqual(servers["github"]["type"], "http")
+        self.assertEqual(servers["github"]["url"], MCP_REMOTE["github"])
+        self.assertIn("${GITHUB_PERSONAL_ACCESS_TOKEN}",
+                      servers["github"]["headers"]["Authorization"])
 
     def test_gitlab_platform_adds_gitlab_mcp(self):
         args = make_args(git_platform="gitlab")
         servers = get_mcp_servers(args)
         self.assertIn("gitlab", servers)
+        self.assertEqual(servers["gitlab"]["args"][1], MCP_PACKAGES["gitlab"])
 
-    def test_postgresql_adds_database_mcp(self):
+    def test_postgresql_adds_postgres_mcp(self):
         args = make_args(database="postgresql")
         servers = get_mcp_servers(args)
-        self.assertIn("database", servers)
-        self.assertIn("server-postgres", servers["database"]["args"][1])
+        self.assertIn("postgres", servers)
+        self.assertIn(MCP_PACKAGES["postgres"], servers["postgres"]["args"])
+        self.assertEqual(servers["postgres"]["env"]["DATABASE_URI"], "${DATABASE_URL}")
 
-    def test_sqlite_adds_database_mcp(self):
-        args = make_args(database="sqlite")
+    def test_sqlite_omits_database_mcp(self):
+        # The reference SQLite MCP server is archived/vulnerable — none generated.
+        args = make_args(database="sqlite", git_platform="none")
         servers = get_mcp_servers(args)
-        self.assertIn("database", servers)
-        self.assertIn("server-sqlite", servers["database"]["args"][1])
+        self.assertNotIn("postgres", servers)
+        self.assertNotIn("database", servers)
 
     def test_no_mcp_for_mongodb(self):
         args = make_args(database="mongodb", git_platform="none")
         servers = get_mcp_servers(args)
+        self.assertNotIn("postgres", servers)
         self.assertNotIn("database", servers)
 
-    def test_sentry_flag_adds_sentry_mcp(self):
+    def test_sentry_flag_adds_sentry_remote_mcp(self):
         args = make_args(sentry=True)
         servers = get_mcp_servers(args)
         self.assertIn("sentry", servers)
+        self.assertEqual(servers["sentry"]["type"], "http")
+        self.assertEqual(servers["sentry"]["url"], MCP_REMOTE["sentry"])
 
     def test_no_hardcoded_secrets(self):
         args = make_args(git_platform="github", database="postgresql", sentry=True)
         servers = get_mcp_servers(args)
         for name, config in servers.items():
-            for env_key, env_val in config.get("env", {}).items():
-                self.assertTrue(env_val.startswith("${"),
-                              f"MCP server '{name}' env var '{env_key}' should use ${{}} syntax, got: {env_val}")
+            secrets = list(config.get("env", {}).items()) + list(config.get("headers", {}).items())
+            for key, val in secrets:
+                # Header/env values may wrap the placeholder (e.g. "Bearer ${X}").
+                if "TOKEN" in key.upper() or "AUTHORIZATION" in key.upper():
+                    self.assertIn("${", val,
+                                  f"MCP '{name}' secret '{key}' should use ${{}} syntax, got: {val}")
 
 
 class TestGetHooks(unittest.TestCase):
@@ -591,7 +624,7 @@ class TestScaffoldEndToEnd(unittest.TestCase):
         project_dir = self.tmpdir / "test-app"
         self.assertTrue((project_dir / ".claude" / "commands" / "project-status.md").exists())
         self.assertTrue((project_dir / ".claude" / "commands" / "handoff.md").exists())
-        self.assertTrue((project_dir / ".claude" / "skills" / "simplify.md").exists())
+        self.assertTrue((project_dir / ".claude" / "skills" / "simplify" / "SKILL.md").exists())
         self.assertTrue((project_dir / ".claude" / "settings.json").exists())
         self.assertTrue((project_dir / "CLAUDE.md").exists())
         self.assertTrue((project_dir / "ARCHITECTURE.md").exists())
@@ -616,15 +649,19 @@ class TestScaffoldEndToEnd(unittest.TestCase):
         settings_path = self.tmpdir / "test-app" / ".claude" / "settings.json"
         data = json.loads(settings_path.read_text())
 
-        # Valid JSON structure
+        # settings.json holds hooks (and behavioral settings), NOT MCP servers.
         self.assertIn("hooks", data)
-        self.assertIn("mcpServers", data)
+        self.assertNotIn("mcpServers", data)
         self.assertIn("PreToolUse", data["hooks"])
         self.assertIn("PostToolUse", data["hooks"])
         self.assertIn("Stop", data["hooks"])
-        self.assertIn("github", data["mcpServers"])
-        self.assertIn("database", data["mcpServers"])
-        self.assertIn("sentry", data["mcpServers"])
+
+        # MCP servers live in project-root .mcp.json.
+        mcp_path = self.tmpdir / "test-app" / ".mcp.json"
+        mcp = json.loads(mcp_path.read_text())["mcpServers"]
+        self.assertIn("github", mcp)
+        self.assertIn("postgres", mcp)
+        self.assertIn("sentry", mcp)
 
     def test_skip_mode_preserves_existing(self):
         project_dir = self.tmpdir / "test-app"
@@ -662,12 +699,12 @@ class TestScaffoldEndToEnd(unittest.TestCase):
         result = scaffold(args)
         self.assertEqual(result, 1)
 
-    def test_update_mode_merges_settings(self):
+    def test_update_mode_merges_mcp_json(self):
         project_dir = self.tmpdir / "test-app"
         project_dir.mkdir()
         (project_dir / ".claude").mkdir()
-        settings_path = project_dir / ".claude" / "settings.json"
-        settings_path.write_text(json.dumps({
+        mcp_path = project_dir / ".mcp.json"
+        mcp_path.write_text(json.dumps({
             "mcpServers": {"custom": {"command": "node", "args": ["server.js"]}}
         }))
 
@@ -678,7 +715,7 @@ class TestScaffoldEndToEnd(unittest.TestCase):
         )
         scaffold(args)
 
-        data = json.loads(settings_path.read_text())
+        data = json.loads(mcp_path.read_text())
         self.assertIn("custom", data["mcpServers"])  # preserved
         self.assertIn("github", data["mcpServers"])   # added
 
@@ -699,7 +736,7 @@ class TestScaffoldEndToEnd(unittest.TestCase):
         self.assertTrue(config_path.exists())
         data = json.loads(config_path.read_text())
         self.assertEqual(data["project_name"], "test-app")
-        self.assertEqual(data["version"], "6.0.0")
+        self.assertEqual(data["version"], "7.0.0")
         self.assertIn("scaffolded_at", data)
 
 
@@ -750,6 +787,27 @@ class TestValidateSettings(unittest.TestCase):
         warnings = validate_settings(settings)
         self.assertTrue(any("badKey" in w for w in warnings))
 
+    def test_modern_settings_keys_allowed(self):
+        # Current schema keys must not be flagged as unknown.
+        settings = {
+            "statusLine": {"type": "command", "command": "echo hi"},
+            "fallbackModel": ["sonnet"],
+            "outputStyle": "default",
+            "modelOverrides": {},
+            "disableWorkflows": False,
+            "requiredMinimumVersion": "2.1.150",
+            "attribution": {"commit": False},
+        }
+        warnings = validate_settings(settings)
+        unknown = [w for w in warnings if "Unknown top-level" in w]
+        self.assertEqual(unknown, [])
+
+    def test_modern_hook_events_allowed(self):
+        settings = {"hooks": {"SessionEnd": [], "UserPromptSubmit": [], "TeammateIdle": []}}
+        warnings = validate_settings(settings)
+        unknown = [w for w in warnings if "Unknown hook type" in w]
+        self.assertEqual(unknown, [])
+
     def test_unknown_hook_type(self):
         settings = {"hooks": {"BadHookType": []}}
         warnings = validate_settings(settings)
@@ -761,17 +819,33 @@ class TestValidateSettings(unittest.TestCase):
         self.assertTrue(any("command" in w for w in warnings))
 
 
-class TestMcpVersionsPinned(unittest.TestCase):
-    """Test that MCP packages use pinned versions."""
+class TestMcpPackagesCurrent(unittest.TestCase):
+    """Test that MCP config uses maintained packages and no fabricated pins."""
 
-    def test_all_mcp_servers_use_pinned_versions(self):
-        args = make_args(git_platform="github", database="postgresql", sentry=True)
+    def test_no_deprecated_reference_servers(self):
+        args = make_args(git_platform="github", database="postgresql", sentry=True,
+                         team=True, context7=True, sequential_thinking=True)
+        servers = get_mcp_servers(args)
+        deprecated = (
+            "@modelcontextprotocol/server-github",
+            "@modelcontextprotocol/server-postgres",
+            "@modelcontextprotocol/server-sqlite",
+            "@modelcontextprotocol/server-gitlab",
+            "@modelcontextprotocol/server-sentry",
+        )
+        blob = json.dumps(servers)
+        for pkg in deprecated:
+            self.assertNotIn(pkg, blob, f"Deprecated MCP package should not appear: {pkg}")
+
+    def test_no_fabricated_version_pins(self):
+        # We don't invent npm version pins; npx -y resolves the latest release.
+        args = make_args(git_platform="gitlab", team=True, context7=True,
+                         sequential_thinking=True)
         servers = get_mcp_servers(args)
         for name, config in servers.items():
             for arg in config.get("args", []):
-                if "@modelcontextprotocol" in str(arg):
-                    self.assertRegex(arg, r'@\d+\.\d+\.\d+$',
-                                    f"MCP server '{name}' should use pinned version: {arg}")
+                self.assertNotRegex(str(arg), r'@\d{4}\.\d+\.\d+$',
+                                    f"MCP server '{name}' should not pin a fabricated version: {arg}")
 
 
 class TestNewStacks(unittest.TestCase):
@@ -1252,7 +1326,7 @@ class TestScaffoldWithAgentsAndRules(unittest.TestCase):
         self.assertEqual(data["orm"], "prisma")
         self.assertEqual(data["ci_cd"], "github-actions")
         self.assertEqual(data["dev_cmd"], "npm run dev")
-        self.assertEqual(data["version"], "6.0.0")
+        self.assertEqual(data["version"], "7.0.0")
 
 
 class TestDomainAuditorAgents(unittest.TestCase):
@@ -1600,9 +1674,9 @@ class TestDomainScaffoldIntegration(unittest.TestCase):
 
         self.assertTrue((agents_dir / "compliance-auditor.md").exists())
         self.assertTrue((agents_dir / "architecture-auditor.md").exists())
-        self.assertTrue((skills_dir / "finance-domain-rules.md").exists())
-        self.assertTrue((skills_dir / "sox-rules.md").exists())
-        self.assertTrue((skills_dir / "gdpr-rules.md").exists())
+        self.assertTrue((skills_dir / "finance-domain-rules" / "SKILL.md").exists())
+        self.assertTrue((skills_dir / "sox-rules" / "SKILL.md").exists())
+        self.assertTrue((skills_dir / "gdpr-rules" / "SKILL.md").exists())
 
     def test_metadata_includes_domain(self):
         args = make_args(
@@ -1922,13 +1996,38 @@ class TestAgentFrontmatter(unittest.TestCase):
     def setUp(self):
         self.args = make_args()
 
-    def test_architect_has_effort_high(self):
+    def test_architect_has_xhigh_effort(self):
+        # The deep-design agent uses the deepest persisted effort level (Opus 4.8).
         agents = dict(get_agents(self.args))
-        self.assertIn("effort: high", agents["architect"])
+        self.assertIn("effort: xhigh", agents["architect"])
 
     def test_reviewer_has_disallowed_tools(self):
         agents = dict(get_agents(self.args))
         self.assertIn("disallowedTools: [Write, Edit]", agents["reviewer"])
+
+    def test_settings_includes_fallback_and_statusline(self):
+        hooks = get_hooks(self.args)
+        settings = get_settings(self.args, hooks)
+        self.assertEqual(settings["fallbackModel"], ["sonnet"])
+        self.assertEqual(settings["statusLine"]["type"], "command")
+        # Generated settings must pass our own validator (no unknown keys).
+        from scaffold import validate_settings
+        self.assertEqual([w for w in validate_settings(settings) if "Unknown" in w], [])
+
+    def test_settings_omits_mcp_servers(self):
+        settings = get_settings(self.args, get_hooks(self.args))
+        self.assertNotIn("mcpServers", settings)
+
+    def test_agent_teams_adds_team_hooks(self):
+        args = make_args(agent_teams=True)
+        hooks = get_hooks(args)
+        self.assertIn("TaskCompleted", hooks)
+        self.assertIn("TeammateIdle", hooks)
+
+    def test_no_team_hooks_without_flag(self):
+        hooks = get_hooks(make_args())
+        self.assertNotIn("TaskCompleted", hooks)
+        self.assertNotIn("TeammateIdle", hooks)
 
     def test_security_has_disallowed_tools(self):
         self.args.auth = "clerk"
@@ -2555,6 +2654,222 @@ class TestArchitectureMdFromReview(unittest.TestCase):
         self.assertTrue(args.deep)
         args2 = make_args()
         self.assertFalse(args2.deep)
+
+
+class TestPerformanceOptimizerAgent(unittest.TestCase):
+    """Tests for the @performance-optimizer conditional agent."""
+
+    def test_generated_when_frontend_exists(self):
+        args = make_args(frontend="nextjs", backend="none")
+        agents = get_agents(args)
+        names = [n for n, _ in agents]
+        self.assertIn("performance-optimizer", names)
+
+    def test_generated_when_backend_exists(self):
+        args = make_args(frontend="none", backend="python-fastapi")
+        agents = get_agents(args)
+        names = [n for n, _ in agents]
+        self.assertIn("performance-optimizer", names)
+
+    def test_not_generated_when_no_stack(self):
+        args = make_args(frontend="none", backend="none")
+        agents = get_agents(args)
+        names = [n for n, _ in agents]
+        self.assertNotIn("performance-optimizer", names)
+
+    def test_has_frontend_checks_when_frontend(self):
+        args = make_args(frontend="nextjs", backend="integrated")
+        agents = get_agents(args)
+        content = dict(agents)["performance-optimizer"]
+        self.assertIn("Web Vitals", content)
+        self.assertIn("bundle size", content)
+
+    def test_has_backend_checks_when_backend(self):
+        args = make_args(frontend="none", backend="python-fastapi", database="postgresql")
+        agents = get_agents(args)
+        content = dict(agents)["performance-optimizer"]
+        self.assertIn("N+1 queries", content)
+
+    def test_has_db_checks_when_database(self):
+        args = make_args(frontend="nextjs", backend="integrated", database="postgresql")
+        agents = get_agents(args)
+        content = dict(agents)["performance-optimizer"]
+        self.assertIn("query plans", content)
+
+    def test_within_token_budget(self):
+        args = make_args(frontend="nextjs", backend="integrated", database="postgresql")
+        agents = get_agents(args)
+        content = dict(agents)["performance-optimizer"]
+        lines = content.strip().split("\n")
+        self.assertLessEqual(len(lines), 30, "Agent exceeds 30-line budget")
+
+
+class TestSearchFirstSkill(unittest.TestCase):
+    """Tests for the search-first skill."""
+
+    def test_always_generated(self):
+        args = make_args(frontend="nextjs", backend="integrated")
+        skills = get_skills(args)
+        names = [n for n, _ in skills]
+        self.assertIn("search-first", names)
+
+    def test_has_decision_matrix(self):
+        args = make_args()
+        skills = get_skills(args)
+        content = dict(skills)["search-first"]
+        self.assertIn("Adopt", content)
+        self.assertIn("Extend", content)
+        self.assertIn("Compose", content)
+        self.assertIn("Build", content)
+
+    def test_npm_for_js_stack(self):
+        args = make_args(frontend="nextjs", backend="integrated")
+        skills = get_skills(args)
+        content = dict(skills)["search-first"]
+        self.assertIn("npm", content)
+
+    def test_pypi_for_python_stack(self):
+        args = make_args(frontend="none", backend="python-fastapi")
+        skills = get_skills(args)
+        content = dict(skills)["search-first"]
+        self.assertIn("PyPI", content)
+
+    def test_go_modules_for_go_stack(self):
+        args = make_args(frontend="none", backend="go")
+        skills = get_skills(args)
+        content = dict(skills)["search-first"]
+        self.assertIn("Go modules", content)
+
+    def test_has_anti_patterns(self):
+        args = make_args()
+        skills = get_skills(args)
+        content = dict(skills)["search-first"]
+        self.assertIn("Anti-patterns:", content)
+
+    def test_has_verify(self):
+        args = make_args()
+        skills = get_skills(args)
+        content = dict(skills)["search-first"]
+        self.assertIn("Verify:", content)
+
+
+class TestQualityGateCommand(unittest.TestCase):
+    """Tests for the /quality-gate command."""
+
+    def test_command_registered(self):
+        """Verify /quality-gate appears in scaffolded commands."""
+        with tempfile.TemporaryDirectory() as tmp:
+            args = make_args(output_dir=tmp)
+            scaffold(args)
+            cmd_file = Path(tmp) / ".claude" / "commands" / "quality-gate.md"
+            self.assertTrue(cmd_file.exists())
+
+    def test_has_all_checks(self):
+        content = cmd_quality_gate()
+        self.assertIn("Lint", content)
+        self.assertIn("Type check", content)
+        self.assertIn("Tests", content)
+        self.assertIn("Build", content)
+        self.assertIn("Security scan", content)
+        self.assertIn("Debug code", content)
+        self.assertIn("Secrets", content)
+
+    def test_has_gate_verdict(self):
+        content = cmd_quality_gate()
+        self.assertIn("GATE: PASS / FAIL", content)
+
+    def test_non_blocking_warnings(self):
+        content = cmd_quality_gate()
+        self.assertIn("WARN", content)
+        self.assertIn("don't block", content.lower())
+
+
+class TestContextBudgetCommand(unittest.TestCase):
+    """Tests for the /context-budget command."""
+
+    def test_command_registered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = make_args(output_dir=tmp)
+            scaffold(args)
+            cmd_file = Path(tmp) / ".claude" / "commands" / "context-budget.md"
+            self.assertTrue(cmd_file.exists())
+
+    def test_measures_all_config_types(self):
+        content = cmd_context_budget()
+        self.assertIn("CLAUDE.md", content)
+        self.assertIn("Agents", content)
+        self.assertIn("Rules", content)
+        self.assertIn("Skills", content)
+        self.assertIn("Commands", content)
+
+    def test_has_budget_thresholds(self):
+        content = cmd_context_budget()
+        self.assertIn("30 lines", content)  # agent budget
+        self.assertIn("20 lines", content)  # rule budget
+        self.assertIn("40 lines", content)  # skill budget
+        self.assertIn("100 lines", content)  # CLAUDE.md budget
+
+    def test_has_context_percentage(self):
+        content = cmd_context_budget()
+        self.assertIn("200k context", content)
+
+
+class TestBuildCleanupPass(unittest.TestCase):
+    """Tests for the cleanup pass in /build pipeline."""
+
+    def test_cleanup_in_default_build(self):
+        content = cmd_build()
+        self.assertIn("**Cleanup**", content)
+        self.assertIn("dead code", content.lower())
+
+    def test_cleanup_in_tdd_build(self):
+        content = cmd_build(tdd=True)
+        self.assertIn("**Cleanup**", content)
+
+    def test_cleanup_in_domain_build(self):
+        content = cmd_build(domain="finance", compliance=["sox"])
+        self.assertIn("**Cleanup**", content)
+
+    def test_cleanup_in_tdd_domain_build(self):
+        content = cmd_build(domain="finance", compliance=["sox"], tdd=True)
+        self.assertIn("**Cleanup**", content)
+
+    def test_cleanup_before_review(self):
+        """Cleanup must appear BEFORE review in the pipeline."""
+        content = cmd_build()
+        cleanup_pos = content.index("**Cleanup**")
+        review_pos = content.index("**Review**")
+        self.assertLess(cleanup_pos, review_pos)
+
+    def test_cleanup_after_implement(self):
+        """Cleanup must appear AFTER implement in the pipeline."""
+        content = cmd_build()
+        implement_pos = content.index("**Implement**")
+        cleanup_pos = content.index("**Cleanup**")
+        self.assertLess(implement_pos, cleanup_pos)
+
+    def test_cleanup_removes_debug_artifacts(self):
+        content = cmd_build()
+        self.assertIn("console.log", content)
+        self.assertIn("debugger", content)
+
+    def test_cleanup_checks_dont_break(self):
+        """Cleanup step should verify lint+tests still pass."""
+        content = cmd_build()
+        # Find the cleanup section
+        cleanup_start = content.index("**Cleanup**")
+        # Find the next step after cleanup
+        next_step_markers = ["**Test**", "**Review**", "**Domain Audit**"]
+        next_pos = len(content)
+        for marker in next_step_markers:
+            try:
+                pos = content.index(marker, cleanup_start)
+                next_pos = min(next_pos, pos)
+            except ValueError:
+                pass
+        cleanup_section = content[cleanup_start:next_pos]
+        self.assertIn("lint", cleanup_section.lower())
+        self.assertIn("test", cleanup_section.lower())
 
 
 if __name__ == "__main__":

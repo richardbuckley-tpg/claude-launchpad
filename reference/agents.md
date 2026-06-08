@@ -1,10 +1,11 @@
-# Agent Reference — 15 Lean Agent Templates
+# Agent Reference — 16 Lean Agent Templates
 
 Each agent is ≤30 lines in the generated output. Customize with project-specific values.
 
 ## Selection Logic
 
 **Always generate**: architect, reviewer, testing, push, debugger, refactorer, docs-generator, idea-to-prd, pre-push, dev-ops (10)
+**Add performance-optimizer**: when frontend or backend exists (web vitals, N+1 queries, memory, bundle size)
 **Add security**: when auth, payments, or user data is involved (almost always)
 **Add reliability-auditor**: when event systems detected (Kafka, BullMQ, RabbitMQ, etc.)
 **Add compliance-auditor**: when domain or compliance requirements set
@@ -12,6 +13,38 @@ Each agent is ≤30 lines in the generated output. Customize with project-specif
 **Add architecture-auditor**: when domain is finance, healthcare, or legal
 
 All agents should have stack-specific customizations applied from the interview answers.
+
+---
+
+## Model & Effort Selection (current as of 2026-06)
+
+Agent frontmatter accepts `model`, `effort`, `isolation`, `tools`, `disallowedTools`,
+`maxTurns`, and `color`. Only `name` and `description` are required.
+
+**Model lineup** — the `opus` / `sonnet` / `haiku` aliases always resolve to the latest
+in each family. As of mid-2026:
+- `opus` → Claude Opus 4.8 (deepest reasoning; supports `xhigh` effort)
+- `sonnet` → Claude Sonnet 4.6 (balanced; effort up to `high`)
+- `haiku` → Claude Haiku 4.5 (fast/cheap; route mechanical agents here)
+
+You may also pin a full id (e.g. `claude-opus-4-8`, `claude-sonnet-4-6`) or use `inherit`
+(the default — use the session's model). Prefer aliases unless a build must be reproducible.
+
+**Effort levels** (`effort:` field, overrides session effort while the agent runs):
+`low` → `medium` → `high` → `xhigh` → `max`. Higher = deeper reasoning, more tokens.
+Available levels depend on the model (`xhigh`/`max` are Opus 4.7+). Guidance:
+- **`xhigh`** — architect / deep design / hard debugging (reasoning dominates cost)
+- **`high`** — security, idea-to-prd, dev-ops, reliability/compliance auditors
+- **`medium`/default** — reviewer, testing, refactorer
+- **`low`** — docs-generator, push, mechanical agents (pair with `model: haiku`)
+
+**1M context** — Opus 4.6+ and Sonnet 4.6 support a 1M-token window via the `opus[1m]` /
+`sonnet[1m]` aliases (or `ANTHROPIC_*` env vars). Useful for whole-repo agents (deep-review,
+architecture-auditor) on large codebases; it costs more, so reserve it for genuinely large
+context, not as a default.
+
+**Adaptive reasoning** is on by default for Opus 4.7+: the model allocates thinking per step
+instead of a fixed budget, so `effort` sets the ceiling, not a flat spend.
 
 ---
 
@@ -24,6 +57,7 @@ description: Designs technical solutions from feature requests. Produces impleme
 isolation: worktree
 tools: [Read, Glob, Grep, Bash, Write]
 model: opus
+effort: xhigh
 ---
 
 You are the principal architect. When given a feature request:

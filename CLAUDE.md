@@ -25,9 +25,15 @@ No external dependencies — stdlib only (Python 3.10+).
 
 - All generated files use real values from the interview, never `{placeholders}`
 - Token budgets: CLAUDE.md ≤100 lines, agents ≤30 lines, rules ≤20 lines, skills ≤40 lines
-- `safe_write()` handles skip/force/dry-run modes for all file operations
+- `safe_write()` handles skip/force/dry-run modes (and creates parent dirs) for all file operations
 - User-provided commands validated against `SAFE_CMD_PATTERN` allowlist (injection prevention)
-- MCP env vars use `${VAR}` syntax, never hardcoded secrets. Community MCP (Context7, Sequential Thinking) supported.
+- Skills follow the Agent Skills standard: `.claude/skills/<name>/SKILL.md` with `name:`+`description:` frontmatter (not flat `<name>.md`)
+- Project MCP servers are written to a project-root `.mcp.json` (`{"mcpServers": {...}}`), NOT settings.json
+- MCP uses maintained packages/remotes: GitHub & Sentry via official remote HTTP servers, Postgres via `crystaldba/postgres-mcp`, Context7 via `@upstash/context7-mcp`; deprecated `@modelcontextprotocol/server-*` packages and version pins removed (`MCP_PACKAGES`/`MCP_REMOTE`)
+- MCP secrets use `${VAR}` syntax in env or HTTP headers, never hardcoded; documented in `.env.example`
+- `settings.json` carries hooks + `statusLine` + `fallbackModel: ["sonnet"]` via `get_settings()`; `VALID_SETTINGS_KEYS`/hook-event list track the current schema
+- Models/effort: agents use `opus`/`sonnet` aliases (Opus 4.8 / Sonnet 4.6); architect runs `effort: xhigh`; lineup, effort levels, and 1M-context guidance in `reference/agents.md`
+- Agent Teams (`--agent-teams`): generates `TaskCompleted`/`TeammateIdle` quality-gate hooks (inert outside team sessions)
 - Hooks use `jq` for stdin JSON parsing with `command -v jq` fallback
 - Agents are parameterized with real stack/commands/STOP conditions via `get_agents()`
 - Domain auditor agents (compliance, frontend, architecture) generated when `--domain`/`--compliance` set
@@ -50,7 +56,7 @@ scripts/scaffold.py    — Scaffolder (generates .claude/ tree)
 scripts/analyze.py     — Codebase analyzer (extracts patterns → rules)
 scripts/learn.py       — Learning system (captures corrections)
 scripts/audit.py       — Auditor (scores config health)
-scripts/test_*.py      — Test suites (588 tests)
+scripts/test_*.py      — Test suites (628 tests)
 reference/stacks.md    — Stack patterns (Next.js, FastAPI, Go, Rails, Rust, etc.)
 reference/agents.md    — Agent templates and selection logic
 reference/audit-rules.md — Scoring rubric documentation
@@ -63,4 +69,4 @@ Tests use `unittest` with `tempfile` for isolation. Run with:
 python -m pytest scripts/ -v
 ```
 
-Key test areas: stack detection, pattern detection (error handling, auth, validation, data fetching, testing, API, database), file organization, key abstractions, rule generation, capture/forget/git-analysis, feedback loop (incorporate learned, stale rules, reanalysis suggestion, analysis timestamps), command injection blocking, hook scoping, settings merge, dry-run mode, staleness detection, secret detection, agent/rule generation, community MCP, discoverability checks, context percentage, enhanced auto-detection (commands/git/CI/hosting), monorepo detection, AI config migration, dependency drift, deep review (entry points, API surface, complexity, test coverage map, config/env, enhanced ARCHITECTURE.md).
+Key test areas: stack detection, pattern detection (error handling, auth, validation, data fetching, testing, API, database), file organization, key abstractions, rule generation, capture/forget/git-analysis, feedback loop (incorporate learned, stale rules, reanalysis suggestion, analysis timestamps), command injection blocking, hook scoping, settings merge, dry-run mode, staleness detection, secret detection, agent/rule generation, community MCP, discoverability checks, context percentage, enhanced auto-detection (commands/git/CI/hosting), monorepo detection, AI config migration, dependency drift, deep review (entry points, API surface, complexity, test coverage map, config/env, enhanced ARCHITECTURE.md), performance-optimizer agent, search-first skill, quality-gate command, context-budget command, build pipeline cleanup pass.
