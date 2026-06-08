@@ -1,6 +1,6 @@
 {
   "name": "claude-launchpad",
-  "version": "8.0.0",
+  "version": "8.1.0",
   "description": "Lean, token-optimized Claude Code bootstrapper — interviews you, then generates a complete, real-valued .claude/ configuration (agents, skills, commands, rules, hooks, .mcp.json). Includes a config auditor, codebase analyzer, and learn/evolve loop.",
   "author": {
     "name": "Richard Buckley",

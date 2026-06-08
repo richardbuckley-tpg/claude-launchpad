@@ -45,6 +45,26 @@ def skill_files(skills_dir: Path) -> list:
     return files
 
 
+def load_mcp_servers(project_dir: Path) -> dict:
+    """Merge MCP servers from project-root .mcp.json AND .claude/settings.json.
+
+    The scaffolder writes project MCP servers to .mcp.json (the documented
+    project-scoped location); some setups still keep them in settings.json. The
+    auditor must read BOTH or it audits an empty set.
+    """
+    servers = {}
+    for path in (project_dir / ".mcp.json", project_dir / ".claude" / "settings.json"):
+        if not path.exists():
+            continue
+        try:
+            data = json.loads(path.read_text())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        for name, config in (data.get("mcpServers") or {}).items():
+            servers.setdefault(name, config)
+    return servers
+
+
 def estimate_tokens(lines: int) -> int:
     return lines * TOKENS_PER_LINE
 
@@ -181,7 +201,12 @@ def check_agents(project_dir: Path, result: AuditResult):
         except UnicodeDecodeError:
             pass
 
-    result.add_component(f"Agents ({len(agent_files)})", total_agent_lines, budget_warn=180, budget_fail=300)
+    # Scale the aggregate budget with agent count — the real constraint is the
+    # per-agent ≤30-line target, so a domain/compliance config with 15 agents has
+    # a proportionally larger (still lean) aggregate ceiling than an 8-agent one.
+    n_agents = max(1, len(agent_files))
+    result.add_component(f"Agents ({len(agent_files)})", total_agent_lines,
+                         budget_warn=n_agents * 22, budget_fail=n_agents * 28)
 
 
 def check_rules(project_dir: Path, result: AuditResult):
@@ -212,8 +237,10 @@ def check_settings(project_dir: Path, result: AuditResult):
     if not settings.exists():
         return
 
+    # Budget accommodates a standard generated config: hooks + a permissions block
+    # (deny secrets / allow validated commands) + statusLine + fallbackModel.
     lines = count_lines(settings)
-    result.add_component("settings.json", lines, budget_warn=80, budget_fail=150)
+    result.add_component("settings.json", lines, budget_warn=130, budget_fail=220)
 
     try:
         data = json.loads(settings.read_text())
@@ -291,73 +318,69 @@ def check_staleness(project_dir: Path, result: AuditResult):
 
 
 def check_mcp_servers(project_dir: Path, result: AuditResult):
-    """Check MCP server configuration for issues."""
-    settings = project_dir / ".claude" / "settings.json"
-    if not settings.exists():
-        return
-
-    try:
-        data = json.loads(settings.read_text())
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return  # Already caught by check_settings
-
-    mcp = data.get("mcpServers", {})
+    """Check MCP server configuration for issues (.mcp.json and settings.json)."""
+    mcp = load_mcp_servers(project_dir)
     if not mcp:
         # Not an error — many projects don't need MCP
         return
 
     server_count = len(mcp)
 
-    # Warn if too many MCP servers (startup latency)
-    if server_count > 5:
+    # Many servers add some startup/context cost. Tool search (default-on in 2026)
+    # keeps this modest, so only nudge past a higher threshold.
+    if server_count > 8:
         result.add_issue("warning",
-            f"{server_count} MCP servers configured — may slow startup",
-            "Remove unused MCP servers. Aim for 1-3",
+            f"{server_count} MCP servers configured — may add startup/context cost",
+            "Trim unused MCP servers; mark only frequently-used ones alwaysLoad",
             category="practices")
 
     for name, config in mcp.items():
         if not isinstance(config, dict):
             result.add_issue("error",
                 f"MCP server '{name}' has invalid config (expected object)",
-                f"Fix mcpServers.{name} in settings.json",
+                f"Fix mcpServers.{name}",
                 category="structure")
             continue
 
-        # Check required fields
-        if "command" not in config:
+        # A server is stdio (command) or remote (type http/sse/ws + url).
+        if "command" not in config and "url" not in config:
             result.add_issue("error",
-                f"MCP server '{name}' missing 'command' field",
-                f"Add 'command' to mcpServers.{name}",
+                f"MCP server '{name}' missing 'command' or 'url' field",
+                f"Add 'command' (stdio) or 'url' (remote) to mcpServers.{name}",
                 category="structure")
 
-        # Check for hardcoded secrets — pattern + heuristic based
+        # Check for hardcoded secrets in env values AND HTTP header values.
         SECRET_PATTERNS = [
-            r'^sk-[a-zA-Z0-9]{20,}',      # Anthropic/OpenAI keys
-            r'^ghp_[a-zA-Z0-9]{36}',       # GitHub PAT
-            r'^gho_[a-zA-Z0-9]{36}',       # GitHub OAuth
-            r'^glpat-[a-zA-Z0-9\-]{20,}',  # GitLab PAT
-            r'^AKIA[0-9A-Z]{16}',          # AWS access key
-            r'^eyJ[a-zA-Z0-9]{20,}',       # JWT token
+            r'sk-ant-[a-zA-Z0-9\-]{20,}',  # Anthropic API key (has dashes)
+            r'sk-[a-zA-Z0-9]{20,}',        # OpenAI keys
+            r'sk-proj-[a-zA-Z0-9\-_]{20,}', # OpenAI project keys
+            r'ghp_[a-zA-Z0-9]{36}',        # GitHub PAT (classic)
+            r'gho_[a-zA-Z0-9]{36}',        # GitHub OAuth
+            r'github_pat_[a-zA-Z0-9_]{22,}', # GitHub fine-grained PAT
+            r'glpat-[a-zA-Z0-9\-]{20,}',   # GitLab PAT
+            r'xox[baprs]-[a-zA-Z0-9\-]{10,}', # Slack tokens
+            r'AKIA[0-9A-Z]{16}',           # AWS access key
+            r'eyJ[a-zA-Z0-9]{20,}',        # JWT token
             r'^[a-f0-9]{32,}$',            # Hex strings (generic secrets)
         ]
-        env = config.get("env", {})
-        for env_key, env_val in env.items():
-            if not isinstance(env_val, str) or env_val.startswith("${"):
+        secret_sources = list(config.get("env", {}).items()) + list(config.get("headers", {}).items())
+        for key, val in secret_sources:
+            if not isinstance(val, str) or "${" in val:
                 continue
-            is_secret_key = any(word in env_key.upper() for word in ["TOKEN", "SECRET", "KEY", "PASSWORD", "CREDENTIAL"])
-            is_secret_pattern = any(re.match(p, env_val) for p in SECRET_PATTERNS)
-            if is_secret_key and (len(env_val) > 20 or is_secret_pattern):
+            is_secret_key = any(word in key.upper() for word in ["TOKEN", "SECRET", "KEY", "PASSWORD", "CREDENTIAL", "AUTHORIZATION"])
+            is_secret_pattern = any(re.search(p, val) for p in SECRET_PATTERNS)
+            if is_secret_key and (len(val) > 20 or is_secret_pattern):
                 result.add_issue("error",
-                    f"MCP server '{name}' has hardcoded secret in {env_key}",
-                    f"Use ${{ENV_VAR}} syntax: \"{env_key}\": \"${{{env_key}}}\"",
+                    f"MCP server '{name}' has hardcoded secret in {key}",
+                    f"Use ${{ENV_VAR}} syntax: \"{key}\": \"${{{key}}}\"",
                     category="practices")
             elif is_secret_pattern:
                 result.add_issue("warning",
-                    f"MCP server '{name}': {env_key} value looks like a secret",
+                    f"MCP server '{name}': {key} value looks like a secret",
                     f"Use ${{ENV_VAR}} syntax instead of hardcoding",
                     category="practices")
 
-    result.add_component(f"MCP Servers ({server_count})", server_count * 3, budget_warn=15, budget_fail=30)
+    result.add_component(f"MCP Servers ({server_count})", server_count * 3, budget_warn=24, budget_fail=45)
 
 
 def check_discoverability(project_dir: Path, result: AuditResult):
@@ -390,16 +413,10 @@ def check_discoverability(project_dir: Path, result: AuditResult):
 
 def check_context_percentage(project_dir: Path, result: AuditResult):
     """Check if total config + MCP context exceeds recommended percentage of 200k window."""
-    settings = project_dir / ".claude" / "settings.json"
-    mcp_count = 0
-    if settings.exists():
-        try:
-            data = json.loads(settings.read_text())
-            mcp_count = len(data.get("mcpServers", {}))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            pass
-
-    mcp_tokens = mcp_count * 3000
+    mcp_count = len(load_mcp_servers(project_dir))
+    # With tool search (default-on in 2026) only tool names + server instructions
+    # load at startup, not every tool schema — a few hundred tokens/server, not ~3k.
+    mcp_tokens = mcp_count * 500
     config_tokens = result.total_tokens
     total = config_tokens + mcp_tokens
     pct = round(total / 200000 * 100, 1)
@@ -879,15 +896,8 @@ def generate_recommendations(project_dir: Path) -> list[dict]:
                 "action": "Create these slash commands for better workflow",
             })
 
-    # Check for MCP opportunities
-    settings_path = project_dir / ".claude" / "settings.json"
-    mcp_configured = False
-    if settings_path.exists():
-        try:
-            data = json.loads(settings_path.read_text())
-            mcp_configured = bool(data.get("mcpServers", {}))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            pass
+    # Check for MCP opportunities (reads .mcp.json + settings.json)
+    mcp_configured = bool(load_mcp_servers(project_dir))
 
     if not mcp_configured:
         # Check if project uses GitHub

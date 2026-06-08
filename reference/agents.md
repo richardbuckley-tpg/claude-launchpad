@@ -32,11 +32,17 @@ You may also pin a full id (e.g. `claude-opus-4-8`, `claude-sonnet-4-6`) or use 
 
 **Effort levels** (`effort:` field, overrides session effort while the agent runs):
 `low` → `medium` → `high` → `xhigh` → `max`. Higher = deeper reasoning, more tokens.
-Available levels depend on the model (`xhigh`/`max` are Opus 4.7+). Guidance:
-- **`xhigh`** — architect / deep design / hard debugging (reasoning dominates cost)
-- **`high`** — security, idea-to-prd, dev-ops, reliability/compliance auditors
-- **`medium`/default** — reviewer, testing, refactorer
-- **`low`** — docs-generator, push, mechanical agents (pair with `model: haiku`)
+Available levels depend on the model:
+- **Opus 4.8 / 4.7**: `low`, `medium`, `high`, `xhigh`, `max`
+- **Opus 4.6 / Sonnet 4.6**: `low`, `medium`, `high`, `max` — **no `xhigh`** (it silently
+  falls back to `high`). So never set `xhigh` on a `sonnet` agent.
+
+Defaults: `high` on Opus 4.8/4.6 and Sonnet 4.6; `xhigh` on Opus 4.7. `max` is session-only
+for the session setting, but is valid in agent/skill frontmatter. Guidance:
+- **`xhigh`** — architect / deep design (Opus only)
+- **`high`** — reviewer, security, hard debugging, idea-to-prd, dev-ops, reliability/compliance/architecture auditors
+- **`medium`** — testing, refactorer, frontend-auditor, performance-optimizer
+- **`low`** — docs-generator, push, pre-push, mechanical agents (pair with `model: haiku`)
 
 **1M context** — Opus 4.6+ and Sonnet 4.6 support a 1M-token window via the `opus[1m]` /
 `sonnet[1m]` aliases (or `ANTHROPIC_*` env vars). Useful for whole-repo agents (deep-review,

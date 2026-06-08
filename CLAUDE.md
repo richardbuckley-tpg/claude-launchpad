@@ -31,8 +31,14 @@ No external dependencies — stdlib only (Python 3.10+).
 - Project MCP servers are written to a project-root `.mcp.json` (`{"mcpServers": {...}}`), NOT settings.json
 - MCP uses maintained packages/remotes: GitHub & Sentry via official remote HTTP servers, Postgres via `crystaldba/postgres-mcp`, Context7 via `@upstash/context7-mcp`; deprecated `@modelcontextprotocol/server-*` packages and version pins removed (`MCP_PACKAGES`/`MCP_REMOTE`)
 - MCP secrets use `${VAR}` syntax in env or HTTP headers, never hardcoded; documented in `.env.example`
-- `settings.json` carries hooks + `statusLine` + `fallbackModel: ["sonnet"]` via `get_settings()`; `VALID_SETTINGS_KEYS`/hook-event list track the current schema
-- Models/effort: agents use `opus`/`sonnet` aliases (Opus 4.8 / Sonnet 4.6); architect runs `effort: xhigh`; lineup, effort levels, and 1M-context guidance in `reference/agents.md`
+- `settings.json` carries hooks + `statusLine` + `fallbackModel: "sonnet"` (string) + a `permissions` block via `get_settings()`; `VALID_SETTINGS_KEYS`/hook-event list track the current schema
+- `permissions` (`_get_permissions`): deny credential reads (`.env`/secrets/keys/`~/.ssh`/cloud creds — OS-independent, stronger than `.claudeignore`), allow validated test/lint/build/dev commands, `ask` migrations. Security hooks stay `exit 2` (the *unbypassable* block; `permissionDecision: deny` is weaker)
+- `--sandbox` (`_get_sandbox`): opt-in Bash sandbox block (credential `denyRead` + stack-aware `allowedDomains`); `sandbox` is in `VALID_SETTINGS_KEYS`
+- Runtime scripts (audit/analyze/learn) are copied into the project at `.claude/launchpad/scripts/`; generated commands/hooks/workflows reference them via `${CLAUDE_PROJECT_DIR}` (portable across commit/clone/CI), not an absolute path
+- Agents post-processed by `_tune_agent` (`AGENT_TUNING`/`AGENT_MEMORY`/`AGENT_TRIGGER`): per-agent model+effort (Haiku for mechanical, explicit Sonnet effort, never `xhigh` on Sonnet — it falls back to `high`), `memory: project` on write-capable long-lived agents, "Use when/proactively" trigger on every description
+- Skills post-processed by `_tune_skill`: `disable-model-invocation` + `allowed-tools` on side-effecting `generate-*`/`add-*` skills, trigger phrases on auto-invocable skills. `reduce-complexity` (not `simplify`, which collides with the bundled command)
+- Auditor reads MCP from BOTH `.mcp.json` and `settings.json` (`load_mcp_servers`); agent/settings audit budgets scale with content
+- Models/effort: agents use `opus`/`sonnet`/`haiku` aliases (Opus 4.8 / Sonnet 4.6 / Haiku 4.5); architect runs `effort: xhigh`; lineup, effort levels, and 1M-context guidance in `reference/agents.md`
 - Agent Teams (`--agent-teams`): generates `TaskCompleted`/`TeammateIdle` quality-gate hooks (inert outside team sessions)
 - Dynamic workflows (`get_workflows(args, skill_path)`): generates `.claude/workflows/*.js` (`/ultra-build`, `/ultra-review`, `/security-sweep`, `/semantic-analyze`) — parameterized scripts that orchestrate the project's agents with adversarial verification. Named to avoid colliding with the prose fallbacks; ~0 context cost; skip with `--no-workflows`
 - Semantic analysis (P4): `/semantic-analyze` workflow + `/deep-analyze` prose command (`cmd_deep_analyze`) do hybrid analysis — cheap `analyze.py` regex signals first, then per-subsystem agents extract conventions a regex misses → write `.claude/rules/project-semantic.md` + refresh ARCHITECTURE.md
@@ -59,7 +65,7 @@ scripts/scaffold.py    — Scaffolder (generates .claude/ tree)
 scripts/analyze.py     — Codebase analyzer (extracts patterns → rules)
 scripts/learn.py       — Learning system (captures corrections)
 scripts/audit.py       — Auditor (scores config health)
-scripts/test_*.py      — Test suites (656 tests)
+scripts/test_*.py      — Test suites (669 tests)
 reference/stacks.md    — Stack patterns (Next.js, FastAPI, Go, Rails, Rust, etc.)
 reference/agents.md    — Agent templates and selection logic
 reference/audit-rules.md — Scoring rubric documentation

@@ -5,6 +5,52 @@ All notable changes to Claude Launchpad are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [8.1.0] - 2026-06-08
+
+Hardening pass from a 13-surface, multi-agent audit against the live June-2026 docs
+(98 verified gaps; this ships the highest-impact fixes).
+
+### Fixed
+- **Auditor now reads `.mcp.json`.** `check_mcp_servers`, `check_context_percentage`,
+  and the MCP recommender read MCP from `.mcp.json` AND `settings.json` (`load_mcp_servers`).
+  Previously they read only `settings.json`, so the secret scan, server count, and context
+  math silently ran on an empty set for every generated project.
+- **`fallbackModel` is now a string** (`"sonnet"`), not an array, per the docs.
+- **`reference/agents.md` effort facts corrected**: Sonnet 4.6 supports `max` but NOT
+  `xhigh` (it falls back to `high`); `xhigh` is Opus 4.7+ only.
+- **De-hardcoded interpreter paths.** The scaffolder copies `audit.py`/`analyze.py`/`learn.py`
+  into the project at `.claude/launchpad/scripts/` and generated commands/hooks/workflows
+  reference them via `${CLAUDE_PROJECT_DIR}` — so the drift/audit/learn/evolve subsystem
+  works after commit, clone, or in CI (it previously baked in an absolute author path).
+- Aggregate agent + settings.json audit budgets scale with content (no false over-budget
+  errors on domain/compliance configs).
+
+### Added
+- **`permissions` block** in generated `settings.json`: `deny` credential reads
+  (`.env`, `secrets/**`, `*.pem`/`*.key`, `~/.ssh`, cloud creds) — OS-independent, stronger
+  than `.claudeignore` for the Read tool — and `allow` the project's validated
+  test/lint/build/dev commands (migrations go in `ask`).
+- **`--sandbox` flag** generates a Bash `sandbox` block (credential `denyRead` +
+  stack-aware `allowedDomains`); `sandbox` added to the recognized settings schema.
+- **Persistent agent memory**: write-capable long-lived agents (architect/debugger/refactorer)
+  get `memory: project`; auto-memory taught in SKILL.md.
+- **Auto-delegation triggers**: every agent (and key skills) gained a "Use when…/Use
+  proactively…" clause in its description.
+- **Model/effort tuning**: mechanical agents (docs-generator/push/pre-push) route to
+  `haiku` + `effort: low`; Sonnet agents get explicit `effort` (high for review/audit,
+  medium for codegen; never `xhigh`).
+- **Skill invocation/tool controls**: side-effecting `generate-*`/`add-*` skills get
+  `disable-model-invocation: true` + `allowed-tools`; `/project-status` and `/handoff`
+  pre-load live git state via `!\`cmd\`` injection.
+- Renamed the `simplify` skill to `reduce-complexity` (avoids colliding with the bundled
+  `/simplify`); broadened MCP secret-scan patterns (`sk-ant-`, `github_pat_`, `xox*`) and
+  extended it to HTTP `headers`.
+
+### Note
+- Kept the `exit 2` security hooks as-is: per the docs, `exit 2` is the *unbypassable*
+  block, while `permissionDecision: deny` respects (is overridable by) bypass mode — so
+  switching would have *weakened* the guardrails.
+
 ## [8.0.0] - 2026-06-08
 
 Flagship release (see `docs/ROADMAP-v8.md`) — four pillars that turn Launchpad from
@@ -117,5 +163,6 @@ Prior major release (see `git log` for exact commit history). Highlights:
 - Event-driven system support (Kafka, BullMQ, RabbitMQ, Celery, Temporal, NATS, …).
 - Enhanced auto-detection, monorepo support, AI-config migration, and dependency drift.
 
+[8.1.0]: https://github.com/richardbuckley-tpg/claude-launchpad/releases/tag/v8.1.0
 [8.0.0]: https://github.com/richardbuckley-tpg/claude-launchpad/releases/tag/v8.0.0
 [7.0.0]: https://github.com/richardbuckley-tpg/claude-launchpad/releases/tag/v7.0.0

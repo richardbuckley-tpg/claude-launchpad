@@ -317,7 +317,8 @@ class TestGetSkills(unittest.TestCase):
         args = make_args(frontend="none", backend="none", database="none")
         skills = get_skills(args)
         names = [s[0] for s in skills]
-        self.assertIn("simplify", names)
+        self.assertIn("reduce-complexity", names)  # renamed from simplify (bundled-cmd collision)
+        self.assertNotIn("simplify", names)
         self.assertIn("generate-feature", names)
         # No frontend/backend/db skills
         self.assertNotIn("generate-component", names)
@@ -376,6 +377,17 @@ class TestGetSkills(unittest.TestCase):
         for name, content in skills:
             self.assertIn(f"name: {name}", content,
                           f"Skill '{name}' missing name: frontmatter field")
+
+    def test_side_effecting_skills_are_user_invoked(self):
+        skills = dict(get_skills(make_args(frontend="nextjs", database="postgresql", auth="clerk")))
+        for name in ("generate-feature", "generate-component", "generate-model", "add-protected-route"):
+            self.assertIn("disable-model-invocation: true", skills[name], name)
+            self.assertIn("allowed-tools:", skills[name], name)
+
+    def test_skill_trigger_phrases(self):
+        skills = dict(get_skills(make_args(frontend="nextjs")))
+        self.assertIn("Use proactively", skills["search-first"])
+        self.assertIn("Use when", skills["reduce-complexity"])
 
     def test_no_ai_flag_skips_ai_skills(self):
         args = make_args(ai=False)
@@ -625,7 +637,7 @@ class TestScaffoldEndToEnd(unittest.TestCase):
         project_dir = self.tmpdir / "test-app"
         self.assertTrue((project_dir / ".claude" / "commands" / "project-status.md").exists())
         self.assertTrue((project_dir / ".claude" / "commands" / "handoff.md").exists())
-        self.assertTrue((project_dir / ".claude" / "skills" / "simplify" / "SKILL.md").exists())
+        self.assertTrue((project_dir / ".claude" / "skills" / "reduce-complexity" / "SKILL.md").exists())
         self.assertTrue((project_dir / ".claude" / "settings.json").exists())
         self.assertTrue((project_dir / "CLAUDE.md").exists())
         self.assertTrue((project_dir / "ARCHITECTURE.md").exists())
@@ -755,6 +767,21 @@ class TestScaffoldEndToEnd(unittest.TestCase):
         self.assertTrue(cmd.exists())
         self.assertIn("--drift", cmd.read_text())
 
+    def test_runtime_scripts_copied_and_paths_portable(self):
+        args = make_args(output_dir=str(self.tmpdir), create_root=True)
+        scaffold(args)
+        proj = self.tmpdir / "test-app"
+        # Scripts copied into the project so the living-config subsystem travels with it.
+        for fn in ("audit.py", "analyze.py", "learn.py"):
+            self.assertTrue((proj / ".claude" / "launchpad" / "scripts" / fn).exists(), fn)
+        # Generated references use the portable ${CLAUDE_PROJECT_DIR} path, not an absolute one.
+        audit_cmd = (proj / ".claude" / "commands" / "audit.md").read_text()
+        self.assertIn("${CLAUDE_PROJECT_DIR}/.claude/launchpad/scripts/audit.py", audit_cmd)
+        self.assertNotIn("/Users/", audit_cmd)
+        settings = json.loads((proj / ".claude" / "settings.json").read_text())
+        drift = [h["command"] for e in settings["hooks"]["SessionStart"] for h in e["hooks"] if "--drift" in h["command"]][0]
+        self.assertIn("${CLAUDE_PROJECT_DIR}/.claude/launchpad/scripts/audit.py", drift)
+
     def test_team_flag_adds_pipeline_command(self):
         args = make_args(output_dir=str(self.tmpdir), create_root=True, team=True)
         scaffold(args)
@@ -767,7 +794,7 @@ class TestScaffoldEndToEnd(unittest.TestCase):
         self.assertTrue(config_path.exists())
         data = json.loads(config_path.read_text())
         self.assertEqual(data["project_name"], "test-app")
-        self.assertEqual(data["version"], "8.0.0")
+        self.assertEqual(data["version"], "8.1.0")
         self.assertIn("scaffolded_at", data)
 
 
@@ -1357,7 +1384,7 @@ class TestScaffoldWithAgentsAndRules(unittest.TestCase):
         self.assertEqual(data["orm"], "prisma")
         self.assertEqual(data["ci_cd"], "github-actions")
         self.assertEqual(data["dev_cmd"], "npm run dev")
-        self.assertEqual(data["version"], "8.0.0")
+        self.assertEqual(data["version"], "8.1.0")
 
 
 class TestDomainAuditorAgents(unittest.TestCase):
@@ -2032,6 +2059,37 @@ class TestAgentFrontmatter(unittest.TestCase):
         agents = dict(get_agents(self.args))
         self.assertIn("effort: xhigh", agents["architect"])
 
+    def test_mechanical_agents_routed_to_haiku(self):
+        agents = dict(get_agents(self.args))
+        for name in ("docs-generator", "push", "pre-push"):
+            self.assertIn("model: haiku", agents[name], name)
+            self.assertIn("effort: low", agents[name], name)
+
+    def test_sonnet_agents_have_explicit_effort(self):
+        agents = dict(get_agents(make_args(auth="clerk")))
+        self.assertIn("effort: high", agents["reviewer"])
+        self.assertIn("effort: medium", agents["testing"])
+        self.assertIn("effort: high", agents["security"])
+        # Sonnet must never get xhigh (unsupported → silently falls back to high).
+        self.assertNotIn("effort: xhigh", agents["reviewer"])
+
+    def test_write_capable_agents_get_memory(self):
+        agents = dict(get_agents(self.args))
+        for name in ("architect", "debugger", "refactorer"):
+            self.assertIn("memory: project", agents[name], name)
+        # Read-only auditors must NOT get memory (it needs Write they disallow).
+        self.assertNotIn("memory:", agents["reviewer"])
+
+    def test_agent_descriptions_have_trigger_phrases(self):
+        # Auto-delegation depends on the description carrying a "Use…" trigger.
+        agents = dict(get_agents(make_args(auth="clerk", ai=True, domain="finance", compliance=["sox"])))
+        import re as _re
+        for name in ("architect", "reviewer", "security", "debugger", "testing",
+                     "compliance-auditor", "performance-optimizer"):
+            desc = _re.search(r'^description: (.*)$', agents[name], _re.M).group(1)
+            self.assertTrue("Use proactively" in desc or "Use when" in desc,
+                            f"{name} description lacks a trigger phrase: {desc}")
+
     def test_reviewer_has_disallowed_tools(self):
         agents = dict(get_agents(self.args))
         self.assertIn("disallowedTools: [Write, Edit]", agents["reviewer"])
@@ -2039,11 +2097,30 @@ class TestAgentFrontmatter(unittest.TestCase):
     def test_settings_includes_fallback_and_statusline(self):
         hooks = get_hooks(self.args)
         settings = get_settings(self.args, hooks)
-        self.assertEqual(settings["fallbackModel"], ["sonnet"])
+        self.assertEqual(settings["fallbackModel"], "sonnet")  # string, not array
         self.assertEqual(settings["statusLine"]["type"], "command")
         # Generated settings must pass our own validator (no unknown keys).
         from scaffold import validate_settings
         self.assertEqual([w for w in validate_settings(settings) if "Unknown" in w], [])
+
+    def test_settings_generates_permissions(self):
+        args = make_args(test_cmd="npm run test", lint_cmd="npm run lint",
+                         build_cmd="npm run build", migrate_cmd="npx prisma migrate dev")
+        perms = get_settings(args, get_hooks(args))["permissions"]
+        self.assertIn("Read(.env)", perms["deny"])          # secret reads denied
+        self.assertIn("Read(~/.ssh/**)", perms["deny"])
+        self.assertIn("Bash(npm run test *)", perms["allow"])  # validated cmds pre-approved
+        self.assertIn("Bash(npm run build *)", perms["allow"])
+        self.assertIn("Bash(npx prisma migrate dev *)", perms["ask"])  # migrations prompt
+
+    def test_sandbox_opt_in(self):
+        off = get_settings(make_args(), get_hooks(make_args()))
+        self.assertNotIn("sandbox", off)
+        on_args = make_args(sandbox=True, backend="python-fastapi")
+        on = get_settings(on_args, get_hooks(on_args))
+        self.assertTrue(on["sandbox"]["enabled"])
+        self.assertIn("~/.ssh", on["sandbox"]["filesystem"]["denyRead"])
+        self.assertIn("pypi.org", on["sandbox"]["network"]["allowedDomains"])
 
     def test_settings_omits_mcp_servers(self):
         settings = get_settings(self.args, get_hooks(self.args))

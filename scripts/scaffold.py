@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-claude-launchpad scaffold script v8.0.0
+claude-launchpad scaffold script v8.1.0
 
 Creates the .claude/ configuration directory with agents, rules, hooks, skills,
 commands, and supporting files — all with real values from the interview.
@@ -18,7 +18,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "8.0.0"
+VERSION = "8.1.0"
 
 PROJECT_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*$')
 
@@ -87,8 +87,8 @@ VALID_SETTINGS_KEYS = {
     "preferredNotifChannel", "prefersReducedMotion", "prUrlTemplate", "requiredMaximumVersion",
     "requiredMinimumVersion", "respectGitignore", "showClearContextOnPlanAccept",
     "showThinkingSummaries", "showTurnDuration", "skillListingBudgetFraction", "skillOverrides",
-    "skipWebFetchPreflight", "spinnerTipsEnabled", "spinnerTipsOverride", "spinnerVerbs",
-    "sshConfigs", "statusLine", "strictKnownMarketplaces", "strictPluginOnlyCustomization",
+    "sandbox", "skipWebFetchPreflight", "spinnerTipsEnabled", "spinnerTipsOverride",
+    "spinnerVerbs", "sshConfigs", "statusLine", "strictKnownMarketplaces", "strictPluginOnlyCustomization",
     "syntaxHighlightingDisabled", "teammateMode", "terminalProgressBarEnabled", "tui",
     "ultracode", "useAutoModeDuringPlan", "viewMode", "voice", "voiceEnabled",
     "workflowKeywordTriggerEnabled", "wslInheritsWindowsSettings",
@@ -140,13 +140,19 @@ PRESETS = {
 def cmd_project_status():
     return """---
 description: Show project status — recent changes, test health, open TODOs
+argument-hint: (no arguments)
+allowed-tools: Bash(git status:*), Bash(git log:*), Bash(git branch:*), Read
 ---
 
-Give me a quick project status report:
-1. Check `git status` and `git log --oneline -5` for recent activity
-2. Read `.claude/handoff.md` for current state
-3. Run the test suite to check health
-4. Look for TODO/FIXME in recently changed files
+Current state (pre-loaded):
+- Status: !`git status --short 2>/dev/null | head -30`
+- Recent: !`git log --oneline -5 2>/dev/null`
+- Branch: !`git branch --show-current 2>/dev/null`
+
+Using the context above:
+1. Read `.claude/handoff.md` for in-flight state
+2. Run the test suite to check health
+3. Look for TODO/FIXME in recently changed files
 
 Present: recent changes, branch state, test health, open TODOs, next action.
 """
@@ -154,14 +160,18 @@ Present: recent changes, branch state, test health, open TODOs, next action.
 def cmd_handoff():
     return """---
 description: Auto-capture session state and update handoff document
+allowed-tools: Bash(git log:*), Bash(git diff:*), Bash(git branch:*), Read, Edit, Write
 ---
+
+Session data (pre-loaded):
+- Commits: !`git log --oneline -10 2>/dev/null`
+- Scope: !`git diff --stat HEAD~5..HEAD 2>/dev/null`
+- Changed: !`git diff --name-only HEAD~5..HEAD 2>/dev/null | head -20`
+- Branch: !`git branch --show-current 2>/dev/null`
 
 Auto-capture session state and update `.claude/handoff.md`:
 
-1. **Gather data** (run these commands):
-   - `git log --oneline -10` — recent commits
-   - `git diff --stat HEAD~5..HEAD 2>/dev/null` — scope of changes
-   - `git diff --name-only HEAD~5..HEAD 2>/dev/null | head -20` — changed files
+1. **Review the pre-loaded data above**, plus:
    - Check `docs/blueprints/` for in-flight features
    - Scan recently changed files for TODO/FIXME markers
 
@@ -1088,6 +1098,33 @@ def _ensure_frontmatter_name(name: str, content: str) -> str:
     return content.replace("---\n", f"---\nname: {name}\n", 1)
 
 
+# Skills that scaffold/modify code: user-invoked only, so Claude can't auto-fire a
+# file generator, and pre-approved for the tools they need.
+SKILL_SIDE_EFFECTING = {
+    "generate-feature", "generate-component", "generate-page", "generate-endpoint",
+    "generate-model", "generate-crud", "add-protected-route", "add-ai-feature",
+}
+# Trigger clauses so auto-invocable skills load at the right moment.
+SKILL_TRIGGER = {
+    "reduce-complexity": "Use when code is overly complex or duplicated, or you're asked to simplify.",
+    "search-first": "Use proactively before adding a dependency or building from scratch — check for an existing solution first.",
+    "prompt-engineer": "Use when designing, testing, or iterating on an AI/LLM prompt.",
+}
+
+
+def _tune_skill(name: str, content: str) -> str:
+    """Add trigger phrase + invocation/tool controls to a generated skill."""
+    trig = SKILL_TRIGGER.get(name)
+    if trig and "Use when" not in content and "Use proactively" not in content:
+        content = re.sub(r'^(description: .*?)\s*$',
+                         lambda m: m.group(1).rstrip().rstrip('.') + '. ' + trig,
+                         content, count=1, flags=re.M)
+    if name in SKILL_SIDE_EFFECTING and "disable-model-invocation" not in content:
+        content = content.replace(
+            "---\n", "---\ndisable-model-invocation: true\nallowed-tools: Read, Write, Edit\n", 1)
+    return content
+
+
 def get_skills(args):
     """Return list of (name, content) tuples for skills based on interview answers."""
     skills = []
@@ -1096,8 +1133,9 @@ def get_skills(args):
     db = args.database
     orm = getattr(args, 'orm', 'none') or 'none'
 
-    # Always generated
-    skills.append(("simplify", f"""---
+    # Always generated. Named reduce-complexity to avoid colliding with the
+    # bundled /simplify command (which Claude Code ships and is more capable).
+    skills.append(("reduce-complexity", f"""---
 description: Review code for unnecessary complexity and suggest simpler alternatives
 ---
 
@@ -1719,7 +1757,8 @@ Verify: Decision documented. If adopting a package, check license compatibility 
 """))
 
     # Agent Skills standard: every SKILL.md carries a `name:` field in frontmatter.
-    skills = [(name, _ensure_frontmatter_name(name, content)) for name, content in skills]
+    skills = [(name, _ensure_frontmatter_name(name, _tune_skill(name, content)))
+              for name, content in skills]
     return skills
 
 
@@ -1993,8 +2032,13 @@ def get_settings(args, hooks):
         settings["hooks"] = hooks
 
     # Resilience: try Sonnet if the primary model is overloaded/unavailable.
-    # (No-op when the session already runs on Sonnet.)
-    settings["fallbackModel"] = ["sonnet"]
+    # (No-op when the session already runs on Sonnet.) fallbackModel is a STRING.
+    settings["fallbackModel"] = "sonnet"
+
+    # Permissions: deny credential reads (OS-independent, stronger than .claudeignore
+    # for the Read tool) and pre-approve the project's own validated commands so
+    # routine runs don't prompt. deny > ask > allow precedence.
+    settings["permissions"] = _get_permissions(args)
 
     # Status line: dir @ branch | model. Defensive — never errors, degrades
     # gracefully without jq or git so it can't spam the terminal.
@@ -2009,7 +2053,64 @@ def get_settings(args, hooks):
     )
     settings["statusLine"] = {"type": "command", "command": status_cmd}
 
+    # Sandbox (opt-in, --sandbox): OS-enforced Bash isolation for prompt-free
+    # autonomous runs. macOS/Linux/WSL2 only; degrades to a warning elsewhere.
+    if getattr(args, "sandbox", False):
+        settings["sandbox"] = _get_sandbox(args)
+
     return settings
+
+
+def _get_permissions(args):
+    """Build a permissions block: deny secret reads, allow validated commands."""
+    deny = [
+        "Read(.env)", "Read(.env.*)",            # any .env / .env.local at any depth
+        "Read(secrets/**)", "Read(**/secrets/**)",
+        "Read(**/*.pem)", "Read(**/*.key)",      # private keys / certs
+        "Read(~/.ssh/**)",                       # SSH keys
+        "Read(~/.aws/credentials)",              # AWS creds
+        "Read(~/.config/gcloud/**)",             # GCP creds
+    ]
+    # Pre-approve the project's own validated, non-destructive commands.
+    allow, seen = [], set()
+    for cmd in (getattr(args, "test_cmd", None), getattr(args, "lint_cmd", None),
+                getattr(args, "build_cmd", None), getattr(args, "dev_cmd", None)):
+        if cmd and SAFE_CMD_PATTERN.match(cmd) and cmd not in seen:
+            seen.add(cmd)
+            allow.append(f"Bash({cmd} *)")
+    allow += ["Bash(git add *)", "Bash(git commit *)"]
+    perms = {"allow": allow, "deny": deny}
+    # Migrations change the database — prompt rather than auto-approve.
+    migrate = getattr(args, "migrate_cmd", None)
+    if migrate and SAFE_CMD_PATTERN.match(migrate):
+        perms["ask"] = [f"Bash({migrate} *)"]
+    return perms
+
+
+def _get_sandbox(args):
+    """Conservative sandbox config: deny credential dirs, pre-allow stack domains."""
+    fe = args.frontend or "none"
+    be = args.backend or "none"
+    git = args.git_platform or "none"
+    domains = ["github.com", "api.github.com", "raw.githubusercontent.com",
+               "objects.githubusercontent.com"]
+    if git == "gitlab":
+        domains.append("gitlab.com")
+    node_stacks = ("nextjs", "react-vite", "vue", "sveltekit",
+                   "node-express", "node-fastify", "integrated")
+    if fe in node_stacks or be in node_stacks:
+        domains.append("registry.npmjs.org")
+    if be in ("python-fastapi", "python-django"):
+        domains += ["pypi.org", "files.pythonhosted.org"]
+    if be == "go":
+        domains += ["proxy.golang.org", "sum.golang.org"]
+    if be == "rust-actix":
+        domains += ["crates.io", "static.crates.io"]
+    return {
+        "enabled": True,
+        "filesystem": {"denyRead": ["~/.ssh", "~/.aws", "~/.config/gcloud", "~/.config/gh"]},
+        "network": {"allowedDomains": sorted(set(domains))},
+    }
 
 
 # ── Dynamic Workflows ────────────────────────────────────────────────────
@@ -2917,7 +3018,80 @@ Rules:
 - STOP if optimization would hurt readability without measurable gain
 """))
 
+    # Tune model + effort per agent (Opus 4.8 / Sonnet 4.6 / Haiku 4.5). Sonnet 4.6
+    # supports low/medium/high/max — NOT xhigh (it falls back to high). xhigh is
+    # Opus 4.7+ only. Mechanical agents route to Haiku for cost/latency.
+    agents = [(name, _tune_agent(name, content)) for name, content in agents]
     return agents
+
+
+# model + effort tuning applied to generated agents (architect/idea-to-prd/dev-ops
+# set their own opus/xhigh|high inline and are normalized here too).
+AGENT_TUNING = {
+    "architect": ("opus", "xhigh"),
+    "idea-to-prd": ("opus", "high"),
+    "dev-ops": ("opus", "high"),
+    "docs-generator": ("haiku", "low"),
+    "push": ("haiku", "low"),
+    "pre-push": ("haiku", "low"),
+    "testing": ("sonnet", "medium"),
+    "reviewer": ("sonnet", "high"),
+    "debugger": ("sonnet", "high"),
+    "refactorer": ("sonnet", "medium"),
+    "security": ("sonnet", "high"),
+    "reliability-auditor": ("sonnet", "high"),
+    "compliance-auditor": ("sonnet", "high"),
+    "frontend-auditor": ("sonnet", "medium"),
+    "architecture-auditor": ("sonnet", "high"),
+    "performance-optimizer": ("sonnet", "medium"),
+}
+# Write-capable, long-lived analytical agents get persistent cross-session memory.
+# (Read-only auditors are excluded: memory needs Write, which their denylist removes.)
+AGENT_MEMORY = {"architect", "debugger", "refactorer"}
+
+# Auto-delegation lives and dies by the description. Each agent gets an explicit
+# trigger clause so Claude knows WHEN to hand off to it.
+AGENT_TRIGGER = {
+    "architect": "Use proactively when a feature needs a design or blueprint before coding, or when a change spans multiple systems.",
+    "testing": "Use proactively to write tests from a blueprint or spec before implementation, or when coverage is missing.",
+    "reviewer": "Use proactively immediately after writing or modifying code, before committing or shipping.",
+    "debugger": "Use proactively when a test fails, an error or stack trace appears, or behavior is wrong.",
+    "refactorer": "Use proactively when code is duplicated, overly complex, or flagged for cleanup.",
+    "docs-generator": "Use when asked to write or update API docs, component docs, or README sections.",
+    "push": "Use when creating a branch, commit, or pull request.",
+    "security": "Use proactively when changes touch auth, payments, user data, secrets, or external input.",
+    "reliability-auditor": "Use proactively when changes touch event consumers, producers, queues, or background jobs.",
+    "idea-to-prd": "Use when an idea needs research and a PRD before building.",
+    "pre-push": "Use proactively before pushing or opening a PR to run the full pre-flight gate.",
+    "dev-ops": "Use when planning infrastructure, deployment, Docker, or CI/CD.",
+    "compliance-auditor": "Use proactively when changes affect regulated data or compliance-relevant logic.",
+    "frontend-auditor": "Use proactively when reviewing UI for domain correctness (precision, formatting, accessibility).",
+    "architecture-auditor": "Use proactively when a change affects system boundaries, data flow, or architectural integrity.",
+    "performance-optimizer": "Use proactively when code is slow, queries are heavy, bundles grow, or memory climbs.",
+}
+
+
+def _tune_agent(name, content):
+    """Normalize a generated agent's model/effort, memory, and trigger description."""
+    trigger = AGENT_TRIGGER.get(name)
+    if trigger and "Use proactively" not in content and "Use when" not in content:
+        content = re.sub(r'^(description: .*?)\s*$',
+                         lambda m: m.group(1).rstrip().rstrip('.') + '. ' + trigger,
+                         content, count=1, flags=re.M)
+    tuning = AGENT_TUNING.get(name)
+    if tuning:
+        model, effort = tuning
+        content = re.sub(r'^model:.*$', f'model: {model}', content, count=1, flags=re.M)
+        if re.search(r'^effort:', content, flags=re.M):
+            content = re.sub(r'^effort:.*$', f'effort: {effort}', content, count=1, flags=re.M)
+        else:
+            content = re.sub(r'^(model: .*)$', lambda m: m.group(1) + f'\neffort: {effort}',
+                             content, count=1, flags=re.M)
+    if name in AGENT_MEMORY and not re.search(r'^memory:', content, flags=re.M):
+        # Insert memory: project after the effort line (or model line) in frontmatter.
+        anchor = r'^(effort: .*)$' if re.search(r'^effort:', content, flags=re.M) else r'^(model: .*)$'
+        content = re.sub(anchor, lambda m: m.group(1) + '\nmemory: project', content, count=1, flags=re.M)
+    return content
 
 
 # ── Rules ────────────────────────────────────────────────────────────────
@@ -3264,6 +3438,9 @@ def get_claudeignore(frontend, backend):
         "",
         "# IDE & OS",
         ".idea/", ".vscode/", "*.swp", ".DS_Store", "Thumbs.db",
+        "",
+        "# Launchpad runtime scripts (invoked via Bash, not read as context)",
+        ".claude/launchpad/",
         "",
         "# Package locks",
         "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "poetry.lock",
@@ -4260,8 +4437,23 @@ def scaffold(args):
                 docs_dir.mkdir(parents=True, exist_ok=True)
     print("  Created .claude/ directory structure")
 
-    # 2. Slash commands
-    skill_path = str(Path(__file__).resolve().parent.parent)
+    # 1b. Copy the runtime scripts into the project so the living-config subsystem
+    #     (audit/analyze/learn/evolve/drift) works after commit, clone, or in CI —
+    #     not just on the machine that ran the scaffolder. Generated commands/hooks
+    #     reference them via ${CLAUDE_PROJECT_DIR}, which is portable.
+    launchpad_scripts = Path(__file__).resolve().parent
+    runtime_dir = project_dir / ".claude" / "launchpad" / "scripts"
+    if not dry_run:
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        for fn in ("audit.py", "analyze.py", "learn.py"):
+            src = launchpad_scripts / fn
+            if src.exists():
+                safe_write(runtime_dir / fn, src.read_text(), force=True, dry_run=dry_run)
+        created_files.append(".claude/launchpad/scripts/")
+
+    # 2. Slash commands. Generated references use a portable, version-control-safe
+    #    path to the copied scripts (NOT an absolute path on the author's machine).
+    skill_path = "${CLAUDE_PROJECT_DIR}/.claude/launchpad"
     cmds_dir = project_dir / ".claude" / "commands"
     commands = {
         "project-status": cmd_project_status(), "handoff": cmd_handoff(),
@@ -4700,6 +4892,7 @@ def main():
     p.add_argument("--tdd", action="store_true")
     p.add_argument("--no-worktree", action="store_false", dest="worktree", help="Disable git worktree isolation for /build")
     p.add_argument("--no-workflows", action="store_false", dest="workflows", help="Skip generating .claude/workflows/ dynamic-workflow scripts")
+    p.add_argument("--sandbox", action="store_true", help="Generate a Bash sandbox config (macOS/Linux/WSL2) for prompt-free autonomous runs")
     p.add_argument("--agent-teams", action="store_true", dest="agent_teams", help="Use Claude Code Agent Teams for /build pipeline (experimental)")
     p.add_argument("--conventional-commits", action="store_true")
     p.add_argument("--lint-cmd", default=None, help="Lint command (e.g., 'npm run lint')")

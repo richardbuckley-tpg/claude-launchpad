@@ -17,7 +17,7 @@ Most Claude Code setup tools give you the same generic agents, commands, and rul
 | **Deep review** | None | 7-phase codebase assessment: architecture, security, testing, debt, recommendations |
 | **Build pipeline** | Manual steps | `/build` orchestrates agents with worktree isolation, parallel execution, state tracking |
 
-No external dependencies. Python 3.10+ stdlib only. 656 tests.
+No external dependencies. Python 3.10+ stdlib only. 669 tests.
 
 ---
 
@@ -369,7 +369,7 @@ python scripts/audit.py /path/to/project --json         # JSON output
 ## Development
 
 ```bash
-# Run all tests (656 tests, stdlib only)
+# Run all tests (669 tests, stdlib only)
 cd scripts/
 python -m pytest test_scaffold.py test_audit.py test_analyze.py test_learn.py test_plugin.py -v
 ```

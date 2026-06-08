@@ -325,11 +325,12 @@ class TestCheckMcpServers(unittest.TestCase):
         self.assertEqual(len(errors), 0)
 
     def test_too_many_servers_warning(self):
-        servers = {f"server{i}": {"command": "npx", "args": []} for i in range(7)}
+        # Threshold is >8 (tool search keeps many servers cheap in 2026).
+        servers = {f"server{i}": {"command": "npx", "args": []} for i in range(9)}
         project_dir = make_project(self.tmpdir, settings={"mcpServers": servers})
         r = AuditResult()
         check_mcp_servers(project_dir, r)
-        warnings = [i for i in r.issues if "slow startup" in i["message"]]
+        warnings = [i for i in r.issues if "startup" in i["message"]]
         self.assertTrue(len(warnings) > 0)
 
     def test_missing_command_is_error(self):
@@ -340,6 +341,33 @@ class TestCheckMcpServers(unittest.TestCase):
         check_mcp_servers(project_dir, r)
         errors = [i for i in r.issues if "command" in i["message"]]
         self.assertTrue(len(errors) > 0)
+
+    def test_reads_mcp_json_not_just_settings(self):
+        # The core fix: the scaffolder writes .mcp.json; the auditor must read it.
+        project_dir = make_project(self.tmpdir)
+        (project_dir / ".mcp.json").write_text(json.dumps({
+            "mcpServers": {"github": {"command": "npx", "args": ["-y", "x"]}}}))
+        r = AuditResult()
+        check_mcp_servers(project_dir, r)
+        self.assertTrue(any("MCP" in name for name in r.components),
+                        "auditor should account for .mcp.json servers")
+
+    def test_remote_http_server_not_flagged_missing_command(self):
+        project_dir = make_project(self.tmpdir)
+        (project_dir / ".mcp.json").write_text(json.dumps({
+            "mcpServers": {"sentry": {"type": "http", "url": "https://mcp.sentry.dev/mcp"}}}))
+        r = AuditResult()
+        check_mcp_servers(project_dir, r)
+        self.assertFalse([i for i in r.issues if "missing 'command'" in i["message"]])
+
+    def test_hardcoded_secret_in_header_flagged(self):
+        project_dir = make_project(self.tmpdir)
+        (project_dir / ".mcp.json").write_text(json.dumps({
+            "mcpServers": {"gh": {"type": "http", "url": "https://x",
+                "headers": {"Authorization": "Bearer ghp_" + "a" * 36}}}}))
+        r = AuditResult()
+        check_mcp_servers(project_dir, r)
+        self.assertTrue([i for i in r.issues if "hardcoded secret" in i["message"]])
 
 
 class TestCheckStaleness(unittest.TestCase):
@@ -750,14 +778,24 @@ class TestCheckContextPercentage(unittest.TestCase):
         shutil.rmtree(self.tmpdir)
 
     def test_many_mcp_servers_warns(self):
-        servers = {f"server{i}": {"command": "npx", "args": []} for i in range(7)}
+        servers = {f"server{i}": {"command": "npx", "args": []} for i in range(5)}
         project_dir = make_project(self.tmpdir, settings={"mcpServers": servers})
         r = AuditResult()
-        r.total_tokens = 2000
+        r.total_tokens = 19000
         check_context_percentage(project_dir, r)
-        # 7 servers × 3000 + 2000 = 23000 tokens = 11.5% > 10%
+        # 5 servers × 500 + 19000 = 21500 tokens = 10.75% > 10%
         issues = [i for i in r.issues if "context" in i["message"].lower()]
         self.assertTrue(len(issues) > 0)
+
+    def test_context_percentage_reads_mcp_json(self):
+        # MCP from project-root .mcp.json must count toward context, not just settings.json.
+        project_dir = make_project(self.tmpdir)
+        (project_dir / ".mcp.json").write_text(json.dumps({
+            "mcpServers": {f"s{i}": {"command": "npx"} for i in range(5)}}))
+        r = AuditResult()
+        r.total_tokens = 19000
+        check_context_percentage(project_dir, r)
+        self.assertTrue(any("context" in i["message"].lower() for i in r.issues))
 
     def test_minimal_config_no_warning(self):
         project_dir = make_project(self.tmpdir, settings={"mcpServers": {"gh": {"command": "npx"}}})
